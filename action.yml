@@ -1,0 +1,311 @@
+name: 'OpenFeature Manifest Compare'
+description: 'Compare flag manifests between current branch and upstream source using OpenFeature CLI'
+author: 'OpenFeature'
+
+branding:
+  icon: 'git-branch'
+  color: 'blue'
+
+inputs:
+  against:
+    description: 'Path or source to the target manifest to compare against (URL or provider configuration)'
+    required: true
+  manifest:
+    description: 'Path to local flag manifest file'
+    required: false
+    default: 'flags.json'
+  auth-token:
+    description: 'Authentication token for accessing the flag source (optional)'
+    required: false
+  cli-version:
+    description: 'OpenFeature CLI version to use'
+    required: false
+    default: 'latest'
+  against-manifest-path:
+    description: 'Path where the manifest from the against source will be saved'
+    required: false
+    default: 'against-flags.json'
+  fail-on-diff:
+    description: 'Fail the action if differences are found'
+    required: false
+    default: 'false'
+
+outputs:
+  has-differences:
+    description: 'Whether differences were found between manifests'
+    value: ${{ steps.compare.outputs.has-differences }}
+  comparison-result:
+    description: 'Raw comparison output from OpenFeature CLI'
+    value: ${{ steps.compare.outputs.comparison-result }}
+  against-manifest-path:
+    description: 'Path to the downloaded manifest from the against source'
+    value: ${{ steps.compare.outputs.against-manifest-path }}
+  summary:
+    description: 'Human-readable summary of changes'
+    value: ${{ steps.compare.outputs.summary }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install OpenFeature CLI
+      shell: bash
+      run: |
+        echo "::group::Installing OpenFeature CLI"
+        
+        if [ "${{ inputs.cli-version }}" = "latest" ]; then
+          VERSION=$(curl -s https://api.github.com/repos/open-feature/cli/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+        else
+          VERSION="${{ inputs.cli-version }}"
+        fi
+        
+        echo "::notice::Installing OpenFeature CLI version: $VERSION"
+        
+        # Install OpenFeature CLI using Go (GitHub Actions runners have Go pre-installed)
+        go install github.com/open-feature/cli/cmd/openfeature@${VERSION} 2>&1
+        
+        # Add Go bin to PATH
+        echo "$HOME/go/bin" >> $GITHUB_PATH
+        
+        # Verify installation
+        $HOME/go/bin/openfeature version
+        echo "::endgroup::"
+
+    - name: Pull against manifest
+      shell: bash
+      run: |
+        echo "::group::Pulling against manifest"
+        echo "Source: ${{ inputs.against }}"
+        
+        # Build pull command with optional auth token
+        PULL_CMD="$HOME/go/bin/openfeature pull --flag-source-url \"${{ inputs.against }}\" --manifest \"${{ inputs.against-manifest-path }}\" --no-prompt"
+        
+        # Add auth token if provided
+        if [ -n "${{ inputs.auth-token }}" ]; then
+          echo "::notice::Using authentication token for pulling manifest"
+          PULL_CMD="$PULL_CMD --auth-token \"${{ inputs.auth-token }}\""
+        fi
+        
+        # Use OpenFeature CLI pull command to fetch upstream manifest
+        if ! eval $PULL_CMD; then
+          echo "::error::Failed to pull manifest from ${{ inputs.against }}"
+          exit 1
+        fi
+        
+        # Verify against manifest exists and is readable
+        if [ ! -f "${{ inputs.against-manifest-path }}" ]; then
+          echo "::error::Against manifest file not found at ${{ inputs.against-manifest-path }}"
+          exit 1
+        fi
+        
+        MANIFEST_SIZE=$(wc -c < "${{ inputs.against-manifest-path }}")
+        echo "::notice::Against manifest saved to ${{ inputs.against-manifest-path }} (${MANIFEST_SIZE} bytes)"
+        echo "upstream-manifest-size=${MANIFEST_SIZE}" >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+
+    - name: Verify local manifest
+      shell: bash
+      run: |
+        if [ ! -f "${{ inputs.manifest }}" ]; then
+          echo "::error::Local manifest file not found at ${{ inputs.manifest }}"
+          exit 1
+        fi
+        
+        LOCAL_SIZE=$(wc -c < "${{ inputs.manifest }}")
+        echo "::notice::Local manifest verified: ${{ inputs.manifest }} (${LOCAL_SIZE} bytes)"
+        echo "local-manifest-size=${LOCAL_SIZE}" >> $GITHUB_OUTPUT
+
+    - name: Compare manifests
+      id: compare
+      shell: bash
+      run: |
+        echo "::group::Comparing manifests"
+        
+        # Create output directory for comparison results
+        mkdir -p comparison-output
+        
+        # Run OpenFeature CLI compare command with YAML output
+        set +e  # Don't exit on non-zero return code
+        COMPARE_OUTPUT=$($HOME/go/bin/openfeature compare --manifest "${{ inputs.manifest }}" --against "${{ inputs.against-manifest-path }}" --output yaml 2>&1)
+        COMPARE_EXIT_CODE=$?
+        set -e
+        
+        # Save raw comparison output
+        echo "$COMPARE_OUTPUT" > comparison-output/raw-output.txt
+        
+        # Determine if there are differences
+        HAS_DIFFERENCES="false"
+        if echo "$COMPARE_OUTPUT" | grep -q "No differences found between the manifests"; then
+          HAS_DIFFERENCES="false"
+        elif [ -n "$COMPARE_OUTPUT" ]; then
+          # If there's output and it's not the "no differences" message, differences exist
+          HAS_DIFFERENCES="true"
+        fi
+        
+        # Set outputs
+        echo "has-differences=$HAS_DIFFERENCES" >> $GITHUB_OUTPUT
+        echo "comparison-result<<EOF" >> $GITHUB_OUTPUT
+        echo "$COMPARE_OUTPUT" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "against-manifest-path=${{ inputs.against-manifest-path }}" >> $GITHUB_OUTPUT
+        
+        # Generate summary
+        if [ "$HAS_DIFFERENCES" = "true" ]; then
+          SUMMARY="🔍 Flag manifest differences detected between local and against sources"
+          echo "::warning::Differences found between local and against manifests"
+        else
+          SUMMARY="✅ No differences found between local and against flag manifests"
+          echo "::notice::Manifests are in sync"
+        fi
+        
+        echo "summary<<EOF" >> $GITHUB_OUTPUT
+        echo "$SUMMARY" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        
+        echo "::endgroup::"
+
+    - name: Format output for GitHub Actions summary
+      shell: bash
+      run: |
+        echo "::group::Generating summary"
+        
+        # Header with visual hierarchy
+        echo "# 🚀 OpenFeature Manifest Comparison" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Configuration details in a table for better readability
+        echo "## 📋 Configuration" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Local Manifest** | \`${{ inputs.manifest }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Fail on Diff** | \`${{ inputs.fail-on-diff }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Use the step output directly instead of reading from GITHUB_OUTPUT
+        HAS_DIFFERENCES="${{ steps.compare.outputs.has-differences }}"
+        
+        if [ "$HAS_DIFFERENCES" = "true" ]; then
+          # Status banner with warning color
+          echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
+          echo "> **Differences Detected** - Your local manifest differs from the against source" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Parse the YAML output to extract changes
+          if [ -f "comparison-output/raw-output.txt" ]; then
+            RAW_YAML=$(cat comparison-output/raw-output.txt)
+            
+            # Parse YAML to count changes
+            # Count additions (flags that appear in against but not in local)
+            ADD_COUNT=0
+            if echo "$RAW_YAML" | grep -q "^additions:"; then
+              # Count items under additions section (lines starting with "    - type:")
+              ADD_COUNT=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep -c "^    - type:" || true)
+            fi
+            
+            # Count removals (flags that appear in local but not in against)
+            REMOVE_COUNT=0
+            if echo "$RAW_YAML" | grep -q "^removals:"; then
+              REMOVE_COUNT=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep -c "^    - type:" || true)
+            fi
+            
+            # Count modifications (flags that exist in both but with different values)
+            MODIFY_COUNT=0
+            if echo "$RAW_YAML" | grep -q "^modifications:"; then
+              MODIFY_COUNT=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep -c "^    - type:" || true)
+            fi
+            
+            # Generate colorful summary table
+            echo "## 📊 Summary" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Change Type | Count | Description |" >> $GITHUB_STEP_SUMMARY
+            echo "|-------------|-------|-------------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟢 **Additions** | ![Static Badge](https://img.shields.io/badge/$ADD_COUNT-brightgreen?style=flat&logo=plus&logoColor=white) | New flags in against source |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 **Removals** | ![Static Badge](https://img.shields.io/badge/$REMOVE_COUNT-red?style=flat&logo=minus&logoColor=white) | Flags removed from local manifest |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 **Modifications** | ![Static Badge](https://img.shields.io/badge/$MODIFY_COUNT-orange?style=flat&logo=pencil&logoColor=white) | Flags with changed configurations |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔵 **Total Changes** | ![Static Badge](https://img.shields.io/badge/$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))-blue?style=flat&logo=git-compare&logoColor=white) | Overall differences detected |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Detailed breakdown
+            echo "## 🔍 Change Details" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Parse and display additions
+            if [ $ADD_COUNT -gt 0 ]; then
+              echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
+              echo "> ### 🟢 New Flags Added ($ADD_COUNT)" >> $GITHUB_STEP_SUMMARY
+              echo "> The following flags are present in the **against source** but not in the **local manifest**:" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "<ul>" >> $GITHUB_STEP_SUMMARY
+              echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🟢 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
+              echo "</ul>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Parse and display removals
+            if [ $REMOVE_COUNT -gt 0 ]; then
+              echo "> [!CAUTION]" >> $GITHUB_STEP_SUMMARY
+              echo "> ### 🔴 Flags Removed ($REMOVE_COUNT)" >> $GITHUB_STEP_SUMMARY
+              echo "> The following flags are present in the **local manifest** but not in the **against source**:" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "<ul>" >> $GITHUB_STEP_SUMMARY
+              echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🔴 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
+              echo "</ul>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Parse and display modifications
+            if [ $MODIFY_COUNT -gt 0 ]; then
+              echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
+              echo "> ### 🟡 Flags Modified ($MODIFY_COUNT)" >> $GITHUB_STEP_SUMMARY
+              echo "> The following flags have **different configurations** between manifests:" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Extract modified flag names
+              echo "<ul>" >> $GITHUB_STEP_SUMMARY
+              echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🟡 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
+              echo "</ul>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Add expandable raw YAML output
+            echo "## 📄 Raw Output" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>Click to expand raw YAML comparison output</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```yaml' >> $GITHUB_STEP_SUMMARY
+            echo "$RAW_YAML" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          # Success banner
+          echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
+          echo "> ✅ **All Clear!** - Your local manifest is perfectly in sync with the against source" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎉 Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "No differences were detected between:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Local**: \`${{ inputs.manifest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Against**: \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Your flag configurations are synchronized! 🚀" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "*Generated by [OpenFeature Manifest Compare Action](https://github.com/openfeature/openfeature-action)*" >> $GITHUB_STEP_SUMMARY
+        
+        echo "::endgroup::"
+
+    - name: Handle failure condition
+      shell: bash
+      run: |
+        HAS_DIFFERENCES="${{ steps.compare.outputs.has-differences }}"
+        FAIL_ON_DIFF="${{ inputs.fail-on-diff }}"
+        
+        if [ "$HAS_DIFFERENCES" = "true" ] && [ "$FAIL_ON_DIFF" = "true" ]; then
+          echo "::error::Manifest differences detected and fail-on-diff is enabled"
+          exit 1
+        fi

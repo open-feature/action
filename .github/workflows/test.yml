@@ -1,0 +1,329 @@
+name: Test OpenFeature Manifest Compare Action
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-action:
+    runs-on: ubuntu-latest
+    name: Test manifest comparison
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create sample local manifest
+        run: |
+          cat > openfeature.json << EOF
+          {
+            "flags": {
+              "enableFeatureA": {
+                "flagType": "boolean",
+                "defaultValue": true,
+                "description": "Controls whether Feature A is enabled - modified locally."
+              },
+              "localOnlyFlag": {
+                "flagType": "string",
+                "defaultValue": "Local only value",
+                "description": "A flag that only exists locally."
+              }
+            }
+          }
+          EOF
+
+      - name: Test action with sample upstream
+        uses: ./
+        id: compare-manifests
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'openfeature.json'
+          fail-on-diff: 'false'
+
+      - name: Display comparison results
+        run: |
+          echo "::notice::Has differences: ${{ steps.compare-manifests.outputs.has-differences }}"
+          echo "::notice::Summary: ${{ steps.compare-manifests.outputs.summary }}"
+
+      - name: Test with fail-on-diff enabled
+        uses: ./
+        id: compare-with-fail
+        continue-on-error: true
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'openfeature.json'
+          fail-on-diff: 'true'
+          against-manifest-path: 'against-test.json'
+
+      - name: Test error handling - missing local file
+        uses: ./
+        id: test-missing-local
+        continue-on-error: true
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'nonexistent.yml'
+
+      - name: Verify error handling worked
+        run: |
+          if [ "${{ steps.test-missing-local.outcome }}" != "failure" ]; then
+            echo "::error::Expected test-missing-local to fail but it didn't"
+            exit 1
+          fi
+          echo "::notice::Error handling test passed - action correctly failed with missing local file"
+
+  test-yaml-parsing:
+    runs-on: ubuntu-latest
+    name: Test YAML output parsing
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create test manifest with differences
+        run: |
+          cat > test-manifest.json << EOF
+          {
+            "flags": {
+              "testFlag": {
+                "flagType": "string",
+                "defaultValue": "different-value",
+                "description": "A test flag with different value."
+              },
+              "localOnlyFlag": {
+                "flagType": "boolean",
+                "defaultValue": true,
+                "description": "Flag only in local manifest."
+              }
+            }
+          }
+          EOF
+
+      - name: Test YAML output and parsing
+        uses: ./
+        id: yaml-test
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'test-manifest.json'
+          
+      - name: Verify YAML parsing worked
+        run: |
+          echo "Has differences: ${{ steps.yaml-test.outputs.has-differences }}"
+          echo "Summary: ${{ steps.yaml-test.outputs.summary }}"
+          echo "Raw output:"
+          echo "${{ steps.yaml-test.outputs.comparison-result }}"
+
+  test-manifest-differences:
+    runs-on: ubuntu-latest
+    name: Test various manifest difference scenarios
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test scenario - Flags added locally
+        run: |
+          echo "::notice::Testing scenario where local has additional flags"
+          
+          # Create local manifest with extra flags
+          cat > local-added.json << EOF
+          {
+            "flags": {
+              "existingFlag": {
+                "flagType": "boolean",
+                "defaultValue": true,
+                "description": "Flag that exists in both"
+              },
+              "newLocalFlag": {
+                "flagType": "string",
+                "defaultValue": "local-only",
+                "description": "Flag added locally, not in remote"
+              },
+              "anotherNewFlag": {
+                "flagType": "number",
+                "defaultValue": 42,
+                "description": "Another flag only in local"
+              }
+            }
+          }
+          EOF
+          
+      - name: Compare - local has additional flags
+        uses: ./
+        id: test-added
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'local-added.json'
+          
+      - name: Display results for added flags
+        run: |
+          echo "Has differences: ${{ steps.test-added.outputs.has-differences }}"
+          echo "Comparison output:"
+          echo "${{ steps.test-added.outputs.comparison-result }}"
+
+      - name: Test scenario - Flags removed locally
+        run: |
+          echo "::notice::Testing scenario where local is missing flags that exist in remote"
+          
+          # Create minimal local manifest (missing many remote flags)
+          cat > local-removed.json << EOF
+          {
+            "flags": {
+              "exampleBool": {
+                "flagType": "boolean",
+                "defaultValue": false,
+                "description": "One of the few flags kept locally"
+              }
+            }
+          }
+          EOF
+          
+      - name: Compare - local missing flags
+        uses: ./
+        id: test-removed
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'local-removed.json'
+          
+      - name: Display results for removed flags
+        run: |
+          echo "Has differences: ${{ steps.test-removed.outputs.has-differences }}"
+          echo "Summary: ${{ steps.test-removed.outputs.summary }}"
+
+      - name: Test scenario - Modified flag values
+        run: |
+          echo "::notice::Testing scenario where flags exist in both but with different values"
+          
+          # Create local manifest with modified values
+          cat > local-modified.json << EOF
+          {
+            "flags": {
+              "exampleBool": {
+                "flagType": "boolean",
+                "defaultValue": true,
+                "description": "Modified: was false, now true"
+              },
+              "exampleStr": {
+                "flagType": "string",
+                "defaultValue": "production-value",
+                "description": "Modified: different default value"
+              },
+              "exampleNum": {
+                "flagType": "number",
+                "defaultValue": 999,
+                "description": "Modified: was 10, now 999"
+              }
+            }
+          }
+          EOF
+
+      - name: Compare - modified flag values
+        uses: ./
+        id: test-modified
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'local-modified.json'
+
+      - name: Display results for modified flags
+        run: |
+          echo "Has differences: ${{ steps.test-modified.outputs.has-differences }}"
+          echo "Comparison output:"
+          echo "${{ steps.test-modified.outputs.comparison-result }}"
+
+      - name: Test scenario - Identical manifests
+        run: |
+          echo "::notice::Testing scenario where manifests are identical"
+          
+          # Download the remote manifest to use as local
+          curl -s https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json > identical.json
+
+      - name: Compare - identical manifests
+        uses: ./
+        id: test-identical
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'identical.json'
+
+      - name: Display results for identical manifests
+        run: |
+          echo "Has differences: ${{ steps.test-identical.outputs.has-differences }}"
+          echo "Summary: ${{ steps.test-identical.outputs.summary }}"
+          if [ "${{ steps.test-identical.outputs.has-differences }}" = "true" ]; then
+            echo "::error::Expected no differences for identical manifests!"
+            exit 1
+          fi
+          echo "✅ Correctly identified identical manifests"
+
+      - name: Test scenario - Complex mixed changes
+        run: |
+          echo "::notice::Testing scenario with added, removed, and modified flags"
+          
+          cat > local-mixed.json << EOF
+          {
+            "flags": {
+              "exampleBool": {
+                "flagType": "boolean",
+                "defaultValue": true,
+                "description": "Modified from original"
+              },
+              "brandNewFeature": {
+                "flagType": "boolean", 
+                "defaultValue": false,
+                "description": "Added: New feature flag"
+              },
+              "anotherNewFlag": {
+                "flagType": "string",
+                "defaultValue": "innovation",
+                "description": "Added: Another new flag"
+              }
+            }
+          }
+          EOF
+          echo "Note: This manifest has modified exampleBool, added new flags, and removed exampleStr and exampleNum"
+
+      - name: Compare - mixed changes
+        uses: ./
+        id: test-mixed
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'local-mixed.json'
+
+      - name: Display results for mixed changes
+        run: |
+          echo "Has differences: ${{ steps.test-mixed.outputs.has-differences }}"
+          echo "YAML output:"
+          echo "${{ steps.test-mixed.outputs.comparison-result }}"
+
+  test-cli-versions:
+    runs-on: ubuntu-latest
+    name: Test different CLI versions
+    strategy:
+      matrix:
+        cli-version: ['latest', 'v0.3.6']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create test manifest
+        run: |
+          cat > version-test.json << EOF
+          {
+            "flags": {
+              "versionTest": {
+                "flagType": "boolean",
+                "defaultValue": true,
+                "description": "A flag for testing CLI versions."
+              }
+            }
+          }
+          EOF
+
+      - name: Test with CLI version ${{ matrix.cli-version }}
+        uses: ./
+        with:
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: 'version-test.json'
+          cli-version: ${{ matrix.cli-version }}
