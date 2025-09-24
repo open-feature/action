@@ -8,12 +8,15 @@ branding:
 
 inputs:
   against:
-    description: 'Path or source to the target manifest to compare against (URL or provider configuration)'
-    required: true
+    description: 'URL/remote source OR local path for git comparison (optional for PR workflows)'
+    required: false
   manifest:
     description: 'Path to local flag manifest file'
     required: false
     default: 'flags.json'
+  base-branch:
+    description: 'Base branch for git comparison (auto-detected in PRs)'
+    required: false
   auth-token:
     description: 'Authentication token for accessing the flag source (optional)'
     required: false
@@ -74,21 +77,79 @@ runs:
       shell: bash
       run: |
         echo "::group::Pulling against manifest"
-        echo "Source: ${{ inputs.against }}"
         
-        # Build pull command with optional auth token
-        PULL_CMD="$HOME/go/bin/openfeature pull --flag-source-url \"${{ inputs.against }}\" --manifest \"${{ inputs.against-manifest-path }}\" --no-prompt"
-        
-        # Add auth token if provided
-        if [ -n "${{ inputs.auth-token }}" ]; then
-          echo "::notice::Using authentication token for pulling manifest"
-          PULL_CMD="$PULL_CMD --auth-token \"${{ inputs.auth-token }}\""
+        # Determine mode based on 'against' input
+        if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
+          MODE="url"
+          echo "::notice::URL mode detected"
+          echo "Source: ${{ inputs.against }}"
+        else
+          MODE="git"
+          echo "::notice::Git mode detected"
+          
+          # Determine target branch
+          if [ -n "${{ github.base_ref }}" ]; then
+            # In PR context - use PR base branch
+            TARGET_BRANCH="${{ github.base_ref }}"
+            echo "::notice::Using PR base branch: $TARGET_BRANCH"
+          elif [ -n "${{ inputs.base-branch }}" ]; then
+            # Use explicitly provided base branch
+            TARGET_BRANCH="${{ inputs.base-branch }}"
+            echo "::notice::Using specified base branch: $TARGET_BRANCH"
+          else
+            # Default to 'main' branch
+            TARGET_BRANCH="main"
+            echo "::notice::Using default base branch: $TARGET_BRANCH"
+          fi
+          
+          # Get manifest path (use 'against' if provided, otherwise use same as 'manifest')
+          if [ -z "${{ inputs.against }}" ]; then
+            REMOTE_PATH="${{ inputs.manifest }}"
+            echo "::notice::Comparing same manifest path between branches: $REMOTE_PATH"
+          else
+            REMOTE_PATH="${{ inputs.against }}"
+            echo "::notice::Comparing different paths - Base: $REMOTE_PATH, Local: ${{ inputs.manifest }}"
+          fi
         fi
         
-        # Use OpenFeature CLI pull command to fetch upstream manifest
-        if ! eval $PULL_CMD; then
-          echo "::error::Failed to pull manifest from ${{ inputs.against }}"
-          exit 1
+        if [ "$MODE" = "url" ]; then
+          # URL mode - use OpenFeature CLI pull command
+          PULL_CMD="$HOME/go/bin/openfeature pull --flag-source-url \"${{ inputs.against }}\" --manifest \"${{ inputs.against-manifest-path }}\" --no-prompt"
+          
+          # Add auth token if provided
+          if [ -n "${{ inputs.auth-token }}" ]; then
+            echo "::notice::Using authentication token for pulling manifest"
+            PULL_CMD="$PULL_CMD --auth-token \"${{ inputs.auth-token }}\""
+          fi
+          
+          # Use OpenFeature CLI pull command to fetch upstream manifest
+          if ! eval $PULL_CMD; then
+            echo "::error::Failed to pull manifest from ${{ inputs.against }}"
+            exit 1
+          fi
+        else
+          # Git mode - fetch manifest from target branch
+          echo "::notice::Fetching manifest from git branch"
+          
+          # Verify the target branch exists
+          if ! git rev-parse --verify "origin/$TARGET_BRANCH" >/dev/null 2>&1; then
+            if ! git rev-parse --verify "$TARGET_BRANCH" >/dev/null 2>&1; then
+              echo "::error::Target branch '$TARGET_BRANCH' not found in local or remote repository"
+              exit 1
+            fi
+          fi
+          
+          # Fetch manifest from target branch
+          if ! git show "$TARGET_BRANCH:$REMOTE_PATH" > "${{ inputs.against-manifest-path }}" 2>/dev/null; then
+            # Try with origin/ prefix if direct branch doesn't work
+            if ! git show "origin/$TARGET_BRANCH:$REMOTE_PATH" > "${{ inputs.against-manifest-path }}" 2>/dev/null; then
+              echo "::error::Failed to fetch manifest '$REMOTE_PATH' from branch '$TARGET_BRANCH'"
+              echo "::error::Make sure the manifest file exists in the target branch"
+              exit 1
+            fi
+          fi
+          
+          echo "::notice::Successfully fetched manifest from branch $TARGET_BRANCH"
         fi
         
         # Verify against manifest exists and is readable
@@ -178,7 +239,29 @@ runs:
         echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
         echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
         echo "| **Local Manifest** | \`${{ inputs.manifest }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
+        
+        # Determine and display the against source
+        if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
+          echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
+        else
+          # Git mode - show branch and path
+          if [ -n "${{ github.base_ref }}" ]; then
+            TARGET_BRANCH="${{ github.base_ref }}"
+          elif [ -n "${{ inputs.base-branch }}" ]; then
+            TARGET_BRANCH="${{ inputs.base-branch }}"
+          else
+            TARGET_BRANCH="main"
+          fi
+          
+          if [ -z "${{ inputs.against }}" ]; then
+            REMOTE_PATH="${{ inputs.manifest }}"
+          else
+            REMOTE_PATH="${{ inputs.against }}"
+          fi
+          
+          echo "| **Against Source** | Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\` |" >> $GITHUB_STEP_SUMMARY
+        fi
+        
         echo "| **Fail on Diff** | \`${{ inputs.fail-on-diff }}\` |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
@@ -288,7 +371,28 @@ runs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "No differences were detected between:" >> $GITHUB_STEP_SUMMARY
           echo "- **Local**: \`${{ inputs.manifest }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Against**: \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Show appropriate against source based on mode
+          if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
+            echo "- **Against**: \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            # Git mode - show branch and path
+            if [ -n "${{ github.base_ref }}" ]; then
+              TARGET_BRANCH="${{ github.base_ref }}"
+            elif [ -n "${{ inputs.base-branch }}" ]; then
+              TARGET_BRANCH="${{ inputs.base-branch }}"
+            else
+              TARGET_BRANCH="main"
+            fi
+            
+            if [ -z "${{ inputs.against }}" ]; then
+              REMOTE_PATH="${{ inputs.manifest }}"
+            else
+              REMOTE_PATH="${{ inputs.against }}"
+            fi
+            
+            echo "- **Against**: Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\`" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Your flag configurations are synchronized! 🚀" >> $GITHUB_STEP_SUMMARY
         fi

@@ -1,0 +1,31 @@
+{
+  "flags": {
+    "enableNewUI": {
+      "state": "ENABLED",
+      "variants": {
+        "on": true,
+        "off": false
+      },
+      "defaultVariant": "on",
+      "targeting": {}
+    },
+    "featureToggleExample": {
+      "state": "ENABLED", 
+      "variants": {
+        "control": "control-experience",
+        "treatment": "new-experience"
+      },
+      "defaultVariant": "control",
+      "targeting": {}
+    },
+    "maintenanceMode": {
+      "state": "DISABLED",
+      "variants": {
+        "enabled": true,
+        "disabled": false
+      },
+      "defaultVariant": "disabled",
+      "targeting": {}
+    }
+  }
+}
