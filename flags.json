@@ -6,16 +6,17 @@
         "on": true,
         "off": false
       },
-      "defaultVariant": "on",
+      "defaultVariant": "off",
       "targeting": {}
     },
     "featureToggleExample": {
       "state": "ENABLED", 
       "variants": {
         "control": "control-experience",
-        "treatment": "new-experience"
+        "treatment": "new-experience",
+        "premium": "premium-experience"
       },
-      "defaultVariant": "control",
+      "defaultVariant": "treatment",
       "targeting": {}
     },
     "maintenanceMode": {
@@ -25,6 +26,24 @@
         "disabled": false
       },
       "defaultVariant": "disabled",
+      "targeting": {}
+    },
+    "newFeatureFlag": {
+      "state": "ENABLED",
+      "variants": {
+        "enabled": true,
+        "disabled": false
+      },
+      "defaultVariant": "enabled",
+      "targeting": {}
+    },
+    "experimentalAPI": {
+      "state": "DISABLED",
+      "variants": {
+        "v1": "legacy-api",
+        "v2": "new-api"
+      },
+      "defaultVariant": "v1",
       "targeting": {}
     }
   }
