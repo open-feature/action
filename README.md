@@ -82,7 +82,7 @@ jobs:
 | `auth-token` | Authentication token for accessing protected flag sources (use GitHub secrets) | No | - |
 | `cli-version` | OpenFeature CLI version to use | No | `latest` |
 | `against-manifest-path` | Path where the fetched manifest from the against source will be saved locally | No | `against-flags.json` |
-| `fail-on-diff` | Fail the action if differences are found | No | `false` |
+| `strict` | Strict mode - fail the action if differences are found | No | `false` |
 
 ### Mode Detection
 
@@ -223,7 +223,7 @@ Fail the workflow if differences are detected:
   with:
     against: "https://api.example.com/flags.yml"
     manifest: "openfeature.yml"
-    fail-on-diff: "true"
+    strict: true
 ```
 
 ### Use Comparison Results
@@ -355,7 +355,7 @@ jobs:
           against: ${{ secrets.FLAG_MANAGEMENT_URL }}
           manifest: "openfeature.yml"
           auth-token: ${{ secrets.FLAG_MANAGEMENT_TOKEN }}
-          fail-on-diff: "false"
+          strict: false
 ```
 
 ### Multi-Environment Comparison
