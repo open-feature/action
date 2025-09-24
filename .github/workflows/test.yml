@@ -327,3 +327,121 @@ jobs:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'version-test.json'
           cli-version: ${{ matrix.cli-version }}
+
+  test-git-mode:
+    runs-on: ubuntu-latest
+    name: Test Git branch comparison mode
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for branch comparison
+      
+      - name: Create sample manifest on current branch
+        run: |
+          cat > flags.json << EOF
+          {
+            "flags": {
+              "gitModeTest": {
+                "flagType": "boolean",
+                "defaultValue": true,
+                "description": "Test flag for git mode"
+              },
+              "newFeatureFlag": {
+                "flagType": "string",
+                "defaultValue": "feature-branch-value",
+                "description": "Flag added on feature branch"
+              }
+            }
+          }
+          EOF
+      
+      - name: Test git mode with explicit base branch (should use main)
+        uses: ./
+        id: git-mode-explicit
+        with:
+          base-branch: main
+          manifest: flags.json
+          fail-on-diff: false
+        continue-on-error: true
+        
+      - name: Display git mode results
+        run: |
+          echo "::notice::Git mode test completed"
+          echo "Has differences: ${{ steps.git-mode-explicit.outputs.has-differences }}"
+          echo "Summary: ${{ steps.git-mode-explicit.outputs.summary }}"
+          
+      - name: Test minimal git mode (no against specified)
+        uses: ./
+        id: git-mode-minimal
+        with:
+          manifest: flags.json
+          fail-on-diff: false
+        continue-on-error: true
+        
+      - name: Test git mode with different path mapping
+        run: |
+          # Create a manifest in a subdirectory
+          mkdir -p config
+          cat > config/feature-flags.json << EOF
+          {
+            "flags": {
+              "pathMappingTest": {
+                "flagType": "number",
+                "defaultValue": 123,
+                "description": "Test different path mapping"
+              }
+            }
+          }
+          EOF
+        
+      - name: Test git mode with path mapping
+        uses: ./
+        id: git-mode-path-mapping
+        with:
+          manifest: config/feature-flags.json
+          against: flags.json  # Compare different paths
+          base-branch: main
+          fail-on-diff: false
+        continue-on-error: true
+
+  test-protocol-detection:
+    runs-on: ubuntu-latest
+    name: Test various URL protocol detection
+    
+    strategy:
+      matrix:
+        protocol:
+          - url: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+            description: 'HTTPS URL'
+          - url: 'http://httpbin.org/json'
+            description: 'HTTP URL'
+          - url: 'file:///etc/hosts'
+            description: 'File protocol'
+        
+    steps:
+      - name: Checkout repository  
+        uses: actions/checkout@v4
+        
+      - name: Create test manifest
+        run: |
+          cat > protocol-test.json << EOF
+          {
+            "flags": {
+              "protocolTest": {
+                "flagType": "string", 
+                "defaultValue": "test-value",
+                "description": "Testing protocol detection for ${{ matrix.protocol.description }}"
+              }
+            }
+          }
+          EOF
+          
+      - name: Test ${{ matrix.protocol.description }}
+        uses: ./
+        continue-on-error: true
+        with:
+          against: ${{ matrix.protocol.url }}
+          manifest: protocol-test.json
+          fail-on-diff: false

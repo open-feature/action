@@ -4,18 +4,21 @@ A GitHub Action that compares OpenFeature flag manifests between your local conf
 
 ## Use Cases
 
-- **Pull Request Validation**: Automatically check if local flag changes align with your flag management system
+- **Pull Request Validation**: Compare flag changes between feature branches and base branches automatically
+- **Branch Comparison**: Validate flag manifest changes during development workflow
+- **Remote Source Validation**: Check if local flag changes align with external flag management systems  
 - **Drift Detection**: Identify when local configurations have diverged from remote configurations
 - **Environment Synchronization**: Ensure consistency across development, staging, and production environments
 - **Compliance Checking**: Verify that flag configurations meet organizational standards
 
 ## Features
 
-- 🔍 **Manifest Comparison** - Compare local flag manifests against remote sources
+- 🔍 **Manifest Comparison** - Compare local flag manifests against remote sources OR git branches
+- 🌿 **Git Branch Comparison** - Automatically compare against PR base branches with minimal configuration
+- 🔗 **Smart Mode Detection** - Automatically detects URL vs git mode based on input format
 - 🔐 **Authentication Support** - Secure access to protected flag sources using tokens
-- 📊 **Multiple Output Formats** - Support for tree, flat, JSON, and YAML output formats
-- 🎯 **GitHub Integration** - Rich summaries displayed directly in GitHub Action results
-- ⚙️ **Configurable** - Flexible inputs for different remote sources and CLI versions
+- 📊 **Rich GitHub Integration** - Detailed summaries with change breakdowns in GitHub Action results
+- ⚙️ **Flexible Configuration** - Support for various protocols and git branch comparisons
 - 🛡️ **Error Handling** - Graceful handling of network issues, missing files, and CLI failures
 - 🔧 **CI/CD Ready** - Designed for seamless integration into existing workflows
 
@@ -23,13 +26,35 @@ A GitHub Action that compares OpenFeature flag manifests between your local conf
 
 - GitHub Actions workflow
 - OpenFeature manifest file in your repository
-- Access to a remote manifest source (URL or provider)
+- For git branch comparison: `fetch-depth: 0` in your checkout action (to access branch history)
+- For remote source comparison: Access to a remote manifest source (URL or provider)
 - (Optional) Authentication token for protected sources
 
 ## Quick Start
 
-Add this action to your workflow to compare your local flag manifest with a remote source:
+Add this action to your workflow to compare flag manifests:
 
+**For Pull Request workflows (compares against base branch):**
+```yaml
+name: Compare Flag Manifests  
+on: pull_request
+
+jobs:
+  compare-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for git branch comparison
+      
+      - name: Compare flag manifests
+        uses: openfeature/openfeature-action@v1
+        with:
+          manifest: "flags.json"
+          # Automatically compares against PR base branch
+```
+
+**For remote source comparison:**
 ```yaml
 name: Compare Flag Manifests
 on: [push, pull_request]
@@ -51,13 +76,25 @@ jobs:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `against` | URL or path to the target manifest to compare against (supports http://, https://, file://) | Yes | - |
+| `against` | URL/remote source OR local path for git comparison (optional for PR workflows) | No | - |
 | `manifest` | Path to your local flag manifest file relative to repository root | No | `flags.json` |
+| `base-branch` | Base branch for git comparison (auto-detected in PRs) | No | - |
 | `auth-token` | Authentication token for accessing protected flag sources (use GitHub secrets) | No | - |
 | `cli-version` | OpenFeature CLI version to use | No | `latest` |
 | `against-manifest-path` | Path where the fetched manifest from the against source will be saved locally | No | `against-flags.json` |
-| `output-format` | Output format for comparison results (`tree`, `flat`, `json`, `yaml`) | No | `tree` |
 | `fail-on-diff` | Fail the action if differences are found | No | `false` |
+
+### Mode Detection
+
+The action automatically detects the comparison mode based on the `against` input:
+
+- **URL Mode**: When `against` contains a protocol (e.g., `http://`, `https://`, `git://`, `ssh://`, `file://`) or Git SSH format
+- **Git Mode**: When `against` is a local path or omitted entirely
+
+**Git Mode Behavior**:
+- If in a pull request context: Uses `$GITHUB_BASE_REF` (the PR's target branch)  
+- If `base-branch` is provided: Uses the specified branch
+- Otherwise: Defaults to `main` branch
 
 ## Outputs
 
@@ -126,16 +163,54 @@ Modified Flags:
 
 ## Usage Examples
 
-### Basic Usage
+### Git Branch Comparison (Recommended for PRs)
 
-Compare your local manifest with a remote source:
+**Minimal configuration for pull request workflows:**
+```yaml
+- name: Compare manifests
+  uses: openfeature/openfeature-action@v1
+  with:
+    manifest: "flags.json"
+    # Automatically uses PR base branch
+```
 
+**Compare against a specific branch:**
+```yaml  
+- name: Compare manifests
+  uses: openfeature/openfeature-action@v1
+  with:
+    manifest: "flags.json"
+    base-branch: "develop"
+```
+
+**Compare different manifest paths between branches:**
+```yaml
+- name: Compare manifests  
+  uses: openfeature/openfeature-action@v1
+  with:
+    manifest: "new-location/flags.json"    # Current branch
+    against: "old-location/flags.json"     # Base branch
+    base-branch: "main"
+```
+
+### Remote Source Comparison
+
+**Compare with remote URL:**
 ```yaml
 - name: Compare manifests
   uses: openfeature/openfeature-action@v1
   with:
     against: "https://api.example.com/flags.yml"
     manifest: "./config/flags.yml"
+```
+
+**Git repository via SSH:**
+```yaml
+- name: Compare manifests
+  uses: openfeature/openfeature-action@v1
+  with:
+    against: "git@github.com:org/config-repo.git#main:flags.json"
+    manifest: "flags.json"
 ```
 
 ### Fail on Differences
@@ -223,14 +298,13 @@ Use authentication token for protected flag sources:
 
 ### Pull Request Validation
 
-Validate that flag changes in PRs match expected remote state:
-
+**Simple PR validation (compares against base branch):**
 ```yaml
 name: Validate Flag Changes
 on:
   pull_request:
     paths:
-      - 'openfeature.yml'
+      - 'flags.json'
       - 'config/flags/**'
 
 jobs:
@@ -238,26 +312,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Validate flag manifest
-        uses: openfeature/openfeature-action@v1
         with:
-          against: ${{ secrets.FLAG_MANAGEMENT_URL }}
-          manifest: "openfeature.yml"
-          auth-token: ${{ secrets.FLAG_MANAGEMENT_TOKEN }}
-          fail-on-diff: "false"
+          fetch-depth: 0  # Required for git branch comparison
+      
+      - name: Validate flag manifest changes
+        uses: openfeature/openfeature-action@v1
+        id: validate
+        with:
+          manifest: "flags.json"
+          # Automatically compares against PR base branch
           
-      - name: Comment on PR
+      - name: Comment on PR if differences found
         uses: actions/github-script@v7
-        if: steps.validate-flags.outputs.has-differences == 'true'
+        if: steps.validate.outputs.has-differences == 'true'  
         with:
           script: |
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '🔍 Flag manifest changes detected. Please review the differences in the action summary.'
+              body: '🔍 Flag manifest changes detected between your branch and the target branch. Please review the differences in the action summary.'
             })
+```
+
+**PR validation against remote source:**
+```yaml
+name: Validate Flag Changes
+on:
+  pull_request:
+    paths:
+      - 'openfeature.yml'
+
+jobs:
+  validate-flags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Validate against remote source
+        uses: openfeature/openfeature-action@v1
+        with:
+          against: ${{ secrets.FLAG_MANAGEMENT_URL }}
+          manifest: "openfeature.yml"
+          auth-token: ${{ secrets.FLAG_MANAGEMENT_TOKEN }}
+          fail-on-diff: "false"
 ```
 
 ### Multi-Environment Comparison
