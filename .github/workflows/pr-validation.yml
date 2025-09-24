@@ -38,21 +38,9 @@ jobs:
             echo "✅ No flag changes detected" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Comment on PR with validation results
-        uses: actions/github-script@v7
-        if: steps.validate.outputs.has-differences == 'true'  
-        with:
-          script: |
-            const summary = `${{ steps.validate.outputs.summary }}`;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## 🔍 Flag Manifest Changes Detected
-              
-${summary}
-
-Please review the detailed comparison in the [GitHub Actions summary](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) to understand what flag changes are included in this PR.
-
-*This is an automated validation by the OpenFeature Action.*`
-            })
+      - name: Log validation summary
+        if: steps.validate.outputs.has-differences == 'true'
+        run: |
+          echo "::notice::Flag changes detected in this PR"
+          echo "::notice::Summary: ${{ steps.validate.outputs.summary }}"
+          echo "::notice::Check the GitHub Actions summary for detailed comparison results"
