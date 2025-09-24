@@ -28,8 +28,8 @@ inputs:
     description: 'Path where the manifest from the against source will be saved'
     required: false
     default: 'against-flags.json'
-  fail-on-diff:
-    description: 'Fail the action if differences are found'
+  strict:
+    description: 'Strict mode - fail the action if differences are found'
     required: false
     default: 'false'
 
@@ -262,7 +262,7 @@ runs:
           echo "| **Against Source** | Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\` |" >> $GITHUB_STEP_SUMMARY
         fi
         
-        echo "| **Fail on Diff** | \`${{ inputs.fail-on-diff }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Strict Mode** | \`${{ inputs.strict }}\` |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         # Use the step output directly instead of reading from GITHUB_OUTPUT
@@ -407,9 +407,9 @@ runs:
       shell: bash
       run: |
         HAS_DIFFERENCES="${{ steps.compare.outputs.has-differences }}"
-        FAIL_ON_DIFF="${{ inputs.fail-on-diff }}"
+        STRICT_MODE="${{ inputs.strict }}"
         
-        if [ "$HAS_DIFFERENCES" = "true" ] && [ "$FAIL_ON_DIFF" = "true" ]; then
-          echo "::error::Manifest differences detected and fail-on-diff is enabled"
+        if [ "$HAS_DIFFERENCES" = "true" ] && [ "$STRICT_MODE" = "true" ]; then
+          echo "::error::Manifest differences detected in strict mode"
           exit 1
         fi

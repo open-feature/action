@@ -41,21 +41,21 @@ jobs:
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'openfeature.json'
-          fail-on-diff: 'false'
+          strict: false
 
       - name: Display comparison results
         run: |
           echo "::notice::Has differences: ${{ steps.compare-manifests.outputs.has-differences }}"
           echo "::notice::Summary: ${{ steps.compare-manifests.outputs.summary }}"
 
-      - name: Test with fail-on-diff enabled
+      - name: Test with strict mode enabled
         uses: ./
         id: compare-with-fail
         continue-on-error: true
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'openfeature.json'
-          fail-on-diff: 'true'
+          strict: true
           against-manifest-path: 'against-test.json'
 
       - name: Test error handling - missing local file
@@ -363,7 +363,7 @@ jobs:
         with:
           base-branch: main
           manifest: flags.json
-          fail-on-diff: false
+          strict: false
         continue-on-error: true
         
       - name: Display git mode results
@@ -377,7 +377,7 @@ jobs:
         id: git-mode-minimal
         with:
           manifest: flags.json
-          fail-on-diff: false
+          strict: false
         continue-on-error: true
         
       - name: Test git mode with different path mapping
@@ -403,7 +403,7 @@ jobs:
           manifest: config/feature-flags.json
           against: flags.json  # Compare different paths
           base-branch: main
-          fail-on-diff: false
+          strict: false
         continue-on-error: true
 
   test-protocol-detection:
@@ -444,4 +444,4 @@ jobs:
         with:
           against: ${{ matrix.protocol.url }}
           manifest: protocol-test.json
-          fail-on-diff: false
+          strict: false
