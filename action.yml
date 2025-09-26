@@ -259,10 +259,10 @@ runs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Change Type | Count | Description |" >> $GITHUB_STEP_SUMMARY
             echo "|-------------|-------|-------------|" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟢 **Additions** | ![Static Badge](https://img.shields.io/badge/$ADD_COUNT-brightgreen?style=flat&logo=plus&logoColor=white) | New flags in against source |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔴 **Removals** | ![Static Badge](https://img.shields.io/badge/$REMOVE_COUNT-red?style=flat&logo=minus&logoColor=white) | Flags removed from local manifest |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟡 **Modifications** | ![Static Badge](https://img.shields.io/badge/$MODIFY_COUNT-orange?style=flat&logo=pencil&logoColor=white) | Flags with changed configurations |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔵 **Total Changes** | ![Static Badge](https://img.shields.io/badge/$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))-blue?style=flat&logo=git-compare&logoColor=white) | Overall differences detected |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟢 **Additions** | **$ADD_COUNT** | New flags in against source |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 **Removals** | **$REMOVE_COUNT** | Flags removed from local manifest |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 **Modifications** | **$MODIFY_COUNT** | Flags with changed configurations |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Changes** | **$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))** | Overall differences detected |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
             # Detailed breakdown
