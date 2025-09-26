@@ -4,43 +4,80 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'flags.json'
+      - "flags.json"
 
 jobs:
   validate-flag-changes:
     runs-on: ubuntu-latest
     name: Validate flag manifest changes
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required for git branch comparison
-      
-      - name: Compare flag manifest changes
+          fetch-depth: 0 # Required for git branch comparison
+
+      - name: Compare against source of truth
         uses: ./
-        id: validate
+        id: source-truth
+        with:
+          manifest: flags.json
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          # PR comment will automatically detect this is a remote URL comparison
+
+      - name: Git compare - Check local changes
+        uses: ./
+        id: git-compare
         with:
           manifest: flags.json
           # No 'against' specified - automatically compares against PR base branch
-          
-      - name: Display validation results
+          # PR comment will automatically detect this is a git comparison
+
+      - name: Display combined validation results
         run: |
-          echo "### 🚀 Flag Manifest Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Flag Manifest Validation Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Has Changes:** ${{ steps.validate.outputs.has-differences }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Summary:** ${{ steps.validate.outputs.summary }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 1️⃣ Source of Truth Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "Comparing local manifest against upstream API/provider" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ steps.validate.outputs.has-differences }}" = "true" ]; then
-            echo "✅ Changes detected - review the detailed comparison above" >> $GITHUB_STEP_SUMMARY
+          echo "- **Has Differences:** ${{ steps.source-truth.outputs.has-differences }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Summary:** ${{ steps.source-truth.outputs.summary }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.source-truth.outputs.has-differences }}" = "true" ]; then
+            echo "⚠️ Local manifest differs from source of truth - may need sync" >> $GITHUB_STEP_SUMMARY
           else
-            echo "✅ No flag changes detected" >> $GITHUB_STEP_SUMMARY
+            echo "✅ Local manifest is in sync with source of truth" >> $GITHUB_STEP_SUMMARY
           fi
 
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 2️⃣ Git Branch Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "Comparing local manifest against target branch (${{ github.base_ref }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Has Differences:** ${{ steps.git-compare.outputs.has-differences }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Summary:** ${{ steps.git-compare.outputs.summary }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.git-compare.outputs.has-differences }}" = "true" ]; then
+            echo "✅ Changes detected in this PR - review the detailed comparison above" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ No changes from target branch" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "**Note:** These two comparisons tell you different things:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source of Truth:** Is your local manifest in sync with your upstream flag provider?" >> $GITHUB_STEP_SUMMARY
+          echo "- **Git Branch:** What changes are being introduced in this PR?" >> $GITHUB_STEP_SUMMARY
+
       - name: Log validation summary
-        if: steps.validate.outputs.has-differences == 'true'
         run: |
-          echo "::notice::Flag changes detected in this PR"
-          echo "::notice::Summary: ${{ steps.validate.outputs.summary }}"
+          if [ "${{ steps.source-truth.outputs.has-differences }}" = "true" ]; then
+            echo "::warning::Local manifest differs from source of truth"
+          fi
+
+          if [ "${{ steps.git-compare.outputs.has-differences }}" = "true" ]; then
+            echo "::notice::Flag changes detected in this PR vs ${{ github.base_ref }}"
+          fi
+
           echo "::notice::Check the GitHub Actions summary for detailed comparison results"
