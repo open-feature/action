@@ -32,6 +32,10 @@ inputs:
     description: 'Strict mode - fail the action if differences are found'
     required: false
     default: 'false'
+  post-pr-comment:
+    description: 'Post a comment on the PR when differences are detected'
+    required: false
+    default: 'true'
 
 outputs:
   has-differences:
@@ -254,6 +258,12 @@ runs:
               MODIFY_COUNT=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep -c "^    - type:" || true)
             fi
             
+            # Export counts for PR comment
+            echo "ADD_COUNT=$ADD_COUNT" >> $GITHUB_ENV
+            echo "REMOVE_COUNT=$REMOVE_COUNT" >> $GITHUB_ENV
+            echo "MODIFY_COUNT=$MODIFY_COUNT" >> $GITHUB_ENV
+            echo "TOTAL_CHANGES=$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))" >> $GITHUB_ENV
+            
             # Generate colorful summary table
             echo "## 📊 Change Summary" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -264,6 +274,9 @@ runs:
             echo "| 🟡 **Modifications** | **$MODIFY_COUNT** | Flags with changed configurations |" >> $GITHUB_STEP_SUMMARY
             echo "| **Total Changes** | **$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))** | Overall differences detected |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Build change details for PR comment
+            CHANGE_DETAILS=""
             
             # Detailed breakdown
             echo "## 🔍 Change Details" >> $GITHUB_STEP_SUMMARY
@@ -279,6 +292,11 @@ runs:
               echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🟢 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
               echo "</ul>" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Build for PR comment
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 New Flags Added ($ADD_COUNT)\n"
+              ADD_LIST=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟢 `/' | sed 's/$/`/')
+              CHANGE_DETAILS="${CHANGE_DETAILS}${ADD_LIST}\n\n"
             fi
             
             # Parse and display removals
@@ -291,6 +309,11 @@ runs:
               echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🔴 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
               echo "</ul>" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Build for PR comment
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 Flags Removed ($REMOVE_COUNT)\n"
+              REMOVE_LIST=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🔴 `/' | sed 's/$/`/')
+              CHANGE_DETAILS="${CHANGE_DETAILS}${REMOVE_LIST}\n\n"
             fi
             
             # Parse and display modifications
@@ -305,7 +328,17 @@ runs:
               echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🟡 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
               echo "</ul>" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Build for PR comment
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🟡 Flags Modified ($MODIFY_COUNT)\n"
+              MODIFY_LIST=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟡 `/' | sed 's/$/`/')
+              CHANGE_DETAILS="${CHANGE_DETAILS}${MODIFY_LIST}\n"
             fi
+            
+            # Export change details for PR comment
+            echo "CHANGE_DETAILS<<EOF" >> $GITHUB_ENV
+            echo -e "$CHANGE_DETAILS" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
             
             # Add configuration section (collapsible)
             echo "## Configuration" >> $GITHUB_STEP_SUMMARY
@@ -354,11 +387,17 @@ runs:
             # Generate unified diff between the two manifest files
             # Use diff -u for unified format, which works well with GitHub's diff syntax
             # Suppress exit code in case files are identical or diff fails
-            diff -u "${{ inputs.against-manifest-path }}" "${{ inputs.manifest }}" | tail -n +3 >> $GITHUB_STEP_SUMMARY || true
+            MANIFEST_DIFF=$(diff -u "${{ inputs.against-manifest-path }}" "${{ inputs.manifest }}" | tail -n +3 || true)
+            echo "$MANIFEST_DIFF" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "</details>" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Export diff for PR comment
+            echo "MANIFEST_DIFF<<EOF" >> $GITHUB_ENV
+            echo "$MANIFEST_DIFF" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
             
             # Add expandable raw YAML output
             echo "## 📄 Raw Output" >> $GITHUB_STEP_SUMMARY
@@ -423,6 +462,58 @@ runs:
         echo "*Generated by [OpenFeature Manifest Compare Action](https://github.com/openfeature/openfeature-action)*" >> $GITHUB_STEP_SUMMARY
         
         echo "::endgroup::"
+
+    - name: Post PR comment
+      if: |
+        github.event_name == 'pull_request' && 
+        steps.compare.outputs.has-differences == 'true' && 
+        inputs.post-pr-comment == 'true'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: openfeature-manifest-compare
+        message: |
+          ## 🚀 OpenFeature Manifest Comparison
+          
+          > [!WARNING]
+          > **Differences Detected** - Your feature flag manifest has changes compared to the base branch
+          
+          ### 📊 Change Summary
+          
+          | Change Type | Count | Description |
+          |-------------|-------|-------------|
+          | 🟢 **Additions** | **${{ env.ADD_COUNT }}** | New flags added |
+          | 🔴 **Removals** | **${{ env.REMOVE_COUNT }}** | Flags removed |
+          | 🟡 **Modifications** | **${{ env.MODIFY_COUNT }}** | Flags modified |
+          | **Total** | **${{ env.TOTAL_CHANGES }}** | Total differences |
+          
+          <details>
+          <summary>📋 View detailed changes</summary>
+          
+          ${{ env.CHANGE_DETAILS }}
+          
+          </details>
+          
+          <details>
+          <summary>🔄 View manifest diff</summary>
+          
+          ```diff
+          ${{ env.MANIFEST_DIFF }}
+          ```
+          
+          </details>
+          
+          ---
+          *This comment is automatically updated on each push to this PR*
+
+    - name: Delete PR comment if no differences
+      if: |
+        github.event_name == 'pull_request' && 
+        steps.compare.outputs.has-differences == 'false' && 
+        inputs.post-pr-comment == 'true'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: openfeature-manifest-compare
+        delete: true
 
     - name: Handle failure condition
       shell: bash
