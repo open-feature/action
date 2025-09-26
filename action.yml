@@ -221,38 +221,6 @@ runs:
         echo "# 🚀 OpenFeature Manifest Comparison" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        # Configuration details in a table for better readability
-        echo "## 📋 Configuration" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
-        echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Local Manifest** | \`${{ inputs.manifest }}\` |" >> $GITHUB_STEP_SUMMARY
-        
-        # Determine and display the against source
-        if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
-          echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
-        else
-          # Git mode - show branch and path
-          if [ -n "${{ github.base_ref }}" ]; then
-            TARGET_BRANCH="${{ github.base_ref }}"
-          elif [ -n "${{ inputs.base-branch }}" ]; then
-            TARGET_BRANCH="${{ inputs.base-branch }}"
-          else
-            TARGET_BRANCH="main"
-          fi
-          
-          if [ -z "${{ inputs.against }}" ]; then
-            REMOTE_PATH="${{ inputs.manifest }}"
-          else
-            REMOTE_PATH="${{ inputs.against }}"
-          fi
-          
-          echo "| **Against Source** | Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\` |" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        echo "| **Strict Mode** | \`${{ inputs.strict }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
         # Use the step output directly instead of reading from GITHUB_OUTPUT
         HAS_DIFFERENCES="${{ steps.compare.outputs.has-differences }}"
         
@@ -287,7 +255,7 @@ runs:
             fi
             
             # Generate colorful summary table
-            echo "## 📊 Summary" >> $GITHUB_STEP_SUMMARY
+            echo "## 📊 Change Summary" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Change Type | Count | Description |" >> $GITHUB_STEP_SUMMARY
             echo "|-------------|-------|-------------|" >> $GITHUB_STEP_SUMMARY
@@ -339,6 +307,43 @@ runs:
               echo "" >> $GITHUB_STEP_SUMMARY
             fi
             
+            # Add configuration section (collapsible)
+            echo "## Configuration" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>View configuration details</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Local Manifest** | \`${{ inputs.manifest }}\` |" >> $GITHUB_STEP_SUMMARY
+            
+            # Determine and display the against source
+            if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
+              echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
+            else
+              # Git mode - show branch and path
+              if [ -n "${{ github.base_ref }}" ]; then
+                TARGET_BRANCH="${{ github.base_ref }}"
+              elif [ -n "${{ inputs.base-branch }}" ]; then
+                TARGET_BRANCH="${{ inputs.base-branch }}"
+              else
+                TARGET_BRANCH="main"
+              fi
+              
+              if [ -z "${{ inputs.against }}" ]; then
+                REMOTE_PATH="${{ inputs.manifest }}"
+              else
+                REMOTE_PATH="${{ inputs.against }}"
+              fi
+              
+              echo "| **Against Source** | Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\` |" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "| **Strict Mode** | \`${{ inputs.strict }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
             # Add expandable raw YAML output
             echo "## 📄 Raw Output" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -357,12 +362,22 @@ runs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 🎉 Status" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "No differences were detected between:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Local**: \`${{ inputs.manifest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "No differences were detected. Your flag configurations are synchronized! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Show appropriate against source based on mode
+          # Add configuration section (collapsible) for success case
+          echo "## Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>View configuration details</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Local Manifest** | \`${{ inputs.manifest }}\` |" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine and display the against source
           if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
-            echo "- **Against**: \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
           else
             # Git mode - show branch and path
             if [ -n "${{ github.base_ref }}" ]; then
@@ -379,10 +394,12 @@ runs:
               REMOTE_PATH="${{ inputs.against }}"
             fi
             
-            echo "- **Against**: Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\`" >> $GITHUB_STEP_SUMMARY
+            echo "| **Against Source** | Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\` |" >> $GITHUB_STEP_SUMMARY
           fi
+          
+          echo "| **Strict Mode** | \`${{ inputs.strict }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Your flag configurations are synchronized! 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
