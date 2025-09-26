@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: write  # Required for posting PR comments
+
 jobs:
   test-action:
     runs-on: ubuntu-latest

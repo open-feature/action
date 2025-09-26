@@ -6,6 +6,10 @@ on:
     paths:
       - "flags.json"
 
+permissions:
+  contents: read
+  pull-requests: write  # Required for posting PR comments
+
 jobs:
   validate-flag-changes:
     runs-on: ubuntu-latest
