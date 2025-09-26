@@ -163,18 +163,6 @@ runs:
         echo "upstream-manifest-size=${MANIFEST_SIZE}" >> $GITHUB_OUTPUT
         echo "::endgroup::"
 
-    - name: Verify local manifest
-      shell: bash
-      run: |
-        if [ ! -f "${{ inputs.manifest }}" ]; then
-          echo "::error::Local manifest file not found at ${{ inputs.manifest }}"
-          exit 1
-        fi
-        
-        LOCAL_SIZE=$(wc -c < "${{ inputs.manifest }}")
-        echo "::notice::Local manifest verified: ${{ inputs.manifest }} (${LOCAL_SIZE} bytes)"
-        echo "local-manifest-size=${LOCAL_SIZE}" >> $GITHUB_OUTPUT
-
     - name: Compare manifests
       id: compare
       shell: bash
