@@ -46,6 +46,7 @@ jobs:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'openfeature.json'
           strict: false
+          post-pr-comment: false
 
       - name: Display comparison results
         run: |
@@ -60,6 +61,7 @@ jobs:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'openfeature.json'
           strict: true
+          post-pr-comment: false
           against-manifest-path: 'against-test.json'
 
       - name: Test error handling - missing local file
@@ -69,6 +71,7 @@ jobs:
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'nonexistent.yml'
+          post-pr-comment: false
 
       - name: Verify error handling worked
         run: |
@@ -111,6 +114,7 @@ jobs:
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'test-manifest.json'
+          post-pr-comment: false
           
       - name: Verify YAML parsing worked
         run: |
@@ -160,6 +164,7 @@ jobs:
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'local-added.json'
+          post-pr-comment: false
           
       - name: Display results for added flags
         run: |
@@ -190,6 +195,7 @@ jobs:
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'local-removed.json'
+          post-pr-comment: false
           
       - name: Display results for removed flags
         run: |
@@ -229,6 +235,7 @@ jobs:
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'local-modified.json'
+          post-pr-comment: false
 
       - name: Display results for modified flags
         run: |
@@ -249,6 +256,7 @@ jobs:
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'identical.json'
+          post-pr-comment: false
 
       - name: Display results for identical manifests
         run: |
@@ -293,6 +301,7 @@ jobs:
         with:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'local-mixed.json'
+          post-pr-comment: false
 
       - name: Display results for mixed changes
         run: |
@@ -331,6 +340,7 @@ jobs:
           against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
           manifest: 'version-test.json'
           cli-version: ${{ matrix.cli-version }}
+          post-pr-comment: false
 
   test-git-mode:
     runs-on: ubuntu-latest
@@ -368,6 +378,7 @@ jobs:
           base-branch: main
           manifest: flags.json
           strict: false
+          post-pr-comment: false
         continue-on-error: true
         
       - name: Display git mode results
@@ -382,6 +393,7 @@ jobs:
         with:
           manifest: flags.json
           strict: false
+          post-pr-comment: false
         continue-on-error: true
         
       - name: Test git mode with different path mapping
@@ -408,6 +420,7 @@ jobs:
           against: flags.json  # Compare different paths
           base-branch: main
           strict: false
+          post-pr-comment: false
         continue-on-error: true
 
   test-protocol-detection:
@@ -449,3 +462,4 @@ jobs:
           against: ${{ matrix.protocol.url }}
           manifest: protocol-test.json
           strict: false
+          post-pr-comment: false
