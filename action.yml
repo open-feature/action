@@ -415,8 +415,13 @@ runs:
             echo '```diff' >> $GITHUB_STEP_SUMMARY
             # Generate unified diff between the two manifest files
             # Use diff -u for unified format, which works well with GitHub's diff syntax
+            # Order: diff -u <old/from> <new/to>
+            # We want: local as 'old/from' and against as 'new/to'
+            # This aligns with OpenFeature CLI terminology:
+            # - Additions (in against, not in local) show as + (added to get from local to against)
+            # - Removals (in local, not in against) show as - (removed to get from local to against)
             # Suppress exit code in case files are identical or diff fails
-            MANIFEST_DIFF=$(diff -u "${{ inputs.against-manifest-path }}" "${{ inputs.manifest }}" | tail -n +3 || true)
+            MANIFEST_DIFF=$(diff -u "${{ inputs.manifest }}" "${{ inputs.against-manifest-path }}" | tail -n +3 || true)
             echo "$MANIFEST_DIFF" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
