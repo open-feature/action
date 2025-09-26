@@ -470,12 +470,15 @@ runs:
         inputs.post-pr-comment == 'true'
       uses: marocchino/sticky-pull-request-comment@v2
       with:
-        header: openfeature-manifest-compare
+        header: openfeature-manifest-compare-${{ hashFiles(inputs.manifest) }}
         message: |
           ## 🚀 OpenFeature Manifest Comparison
           
           > [!WARNING]
-          > **Differences Detected** - Your feature flag manifest has changes compared to the base branch
+          ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 
+              format('> **Out of Sync with Upstream** - Your local manifest (`{0}`) differs from the remote source (`{1}`)', inputs.manifest, inputs.against) || 
+              format('> **Git Changes Detected** - Your feature flag manifest has changes compared to the {0} branch', 
+                     github.base_ref || inputs.base-branch || 'main') }}
           
           ### 📊 Change Summary
           
@@ -503,7 +506,11 @@ runs:
           </details>
           
           ---
-          *This comment is automatically updated on each push to this PR*
+          ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 
+              '*⚠️ Consider syncing with your upstream flag provider to avoid configuration drift*' || 
+              '*📝 This comparison shows changes introduced in this PR*' }}
+          
+          *This comment is automatically updated on each push*
 
     - name: Delete PR comment if no differences
       if: |
@@ -512,7 +519,7 @@ runs:
         inputs.post-pr-comment == 'true'
       uses: marocchino/sticky-pull-request-comment@v2
       with:
-        header: openfeature-manifest-compare
+        header: openfeature-manifest-compare-${{ hashFiles(inputs.manifest) }}
         delete: true
 
     - name: Handle failure condition
