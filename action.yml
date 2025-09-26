@@ -344,6 +344,22 @@ runs:
             echo "</details>" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
+            # Add manifest diff section (collapsible)
+            echo "## 🔄 Manifest Diff" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>View unified diff between manifests</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```diff' >> $GITHUB_STEP_SUMMARY
+            # Generate unified diff between the two manifest files
+            # Use diff -u for unified format, which works well with GitHub's diff syntax
+            # Suppress exit code in case files are identical or diff fails
+            diff -u "${{ inputs.against-manifest-path }}" "${{ inputs.manifest }}" | tail -n +3 >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
             # Add expandable raw YAML output
             echo "## 📄 Raw Output" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
