@@ -60,11 +60,103 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Install OpenFeature CLI
+    - name: Setup and Install CLI
       shell: bash
       run: |
         echo "::group::Installing OpenFeature CLI"
         
+        # Define reusable functions
+        is_url() {
+          [[ "$1" =~ :// ]] || [[ "$1" =~ ^[^/]+:[^/] ]]
+        }
+        
+        get_target_branch() {
+          if [ -n "${{ github.base_ref }}" ]; then
+            echo "${{ github.base_ref }}"
+          elif [ -n "${{ inputs.base-branch }}" ]; then
+            echo "${{ inputs.base-branch }}"
+          else
+            echo "main"
+          fi
+        }
+        
+        pull_manifest() {
+          local source_url="$1"
+          local output_path="$2"
+          local auth_token="$3"
+          local description="$4"
+          
+          echo "::notice::Pulling $description from: $source_url"
+          
+          local pull_cmd="$CLI_PATH pull --flag-source-url \"$source_url\" --manifest \"$output_path\" --no-prompt"
+          
+          if [ -n "$auth_token" ]; then
+            echo "::notice::Using authentication token for $description"
+            pull_cmd="$pull_cmd --auth-token \"$auth_token\""
+          fi
+          
+          if ! eval $pull_cmd; then
+            echo "::error::Failed to pull $description from $source_url"
+            return 1
+          fi
+          
+          echo "::notice::$description downloaded to $output_path"
+        }
+        
+        fetch_git_manifest() {
+          local target_branch="$1"
+          local remote_path="$2"
+          local output_path="$3"
+          
+          echo "::notice::Fetching manifest from git branch $target_branch:$remote_path"
+          
+          # Verify the target branch exists
+          if ! git rev-parse --verify "origin/$target_branch" >/dev/null 2>&1; then
+            if ! git rev-parse --verify "$target_branch" >/dev/null 2>&1; then
+              echo "::error::Target branch '$target_branch' not found in local or remote repository"
+              return 1
+            fi
+          fi
+          
+          # Fetch manifest from target branch
+          if ! git show "$target_branch:$remote_path" > "$output_path" 2>/dev/null; then
+            if ! git show "origin/$target_branch:$remote_path" > "$output_path" 2>/dev/null; then
+              echo "::error::Failed to fetch manifest '$remote_path' from branch '$target_branch'"
+              echo "::error::Make sure the manifest file exists in the target branch"
+              return 1
+            fi
+          fi
+          
+          echo "::notice::Successfully fetched manifest from branch $target_branch"
+        }
+        
+        generate_config_table() {
+          local manifest_path="$1"
+          
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Local Manifest** | \`$manifest_path\` |" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine and display the against source
+          if is_url "${{ inputs.against }}"; then
+            echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            # Git mode - show branch and path
+            local target_branch=$(get_target_branch)
+            local remote_path="${{ inputs.against }}"
+            if [ -z "$remote_path" ]; then
+              remote_path="${{ inputs.manifest }}"
+            fi
+            echo "| **Against Source** | Branch \`$target_branch\` at \`$remote_path\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "| **Strict Mode** | \`${{ inputs.strict }}\` |" >> $GITHUB_STEP_SUMMARY
+        }
+        
+        # Export functions for use in subsequent steps
+        declare -f is_url get_target_branch pull_manifest fetch_git_manifest generate_config_table > /tmp/action_functions.sh
+        
+        # Install CLI
         if [ "${{ inputs.cli-version }}" = "latest" ]; then
           VERSION=$(curl -s https://api.github.com/repos/open-feature/cli/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
         else
@@ -72,148 +164,75 @@ runs:
         fi
         
         echo "::notice::Installing OpenFeature CLI version: $VERSION"
-        
-        # Install OpenFeature CLI using Go (GitHub Actions runners have Go pre-installed)
         go install github.com/open-feature/cli/cmd/openfeature@${VERSION} 2>&1
-        
-        # Add Go bin to PATH
         echo "$HOME/go/bin" >> $GITHUB_PATH
         
+        # Set CLI path for reuse
+        CLI_PATH="$HOME/go/bin/openfeature"
+        echo "CLI_PATH=$CLI_PATH" >> $GITHUB_ENV
+        
         # Verify installation
-        $HOME/go/bin/openfeature version
+        $CLI_PATH version
         echo "::endgroup::"
 
-    - name: Pull local manifest
+    - name: Resolve Manifests
       shell: bash
       run: |
-        echo "::group::Resolving local manifest"
+        echo "::group::Resolving manifests"
         
-        # Determine if manifest is a URL or local path
-        if [[ "${{ inputs.manifest }}" =~ :// ]] || [[ "${{ inputs.manifest }}" =~ ^[^/]+:[^/] ]]; then
-          # Manifest is a URL - pull it
+        # Source our functions
+        source /tmp/action_functions.sh
+        
+        # Resolve local manifest
+        if is_url "${{ inputs.manifest }}"; then
           echo "::notice::Remote manifest URL detected: ${{ inputs.manifest }}"
-          
           LOCAL_MANIFEST_PATH="local-manifest.json"
-          PULL_CMD="$HOME/go/bin/openfeature pull --flag-source-url \"${{ inputs.manifest }}\" --manifest \"$LOCAL_MANIFEST_PATH\" --no-prompt"
-          
-          # Add auth token if provided
-          if [ -n "${{ inputs.manifest-auth-token }}" ]; then
-            echo "::notice::Using authentication token for pulling manifest"
-            PULL_CMD="$PULL_CMD --auth-token \"${{ inputs.manifest-auth-token }}\""
-          fi
-          
-          # Use OpenFeature CLI pull command to fetch manifest
-          if ! eval $PULL_CMD; then
-            echo "::error::Failed to pull manifest from ${{ inputs.manifest }}"
-            exit 1
-          fi
-          
-          echo "::notice::Manifest downloaded to $LOCAL_MANIFEST_PATH"
+          pull_manifest "${{ inputs.manifest }}" "$LOCAL_MANIFEST_PATH" "${{ inputs.manifest-auth-token }}" "manifest"
         else
-          # Manifest is a local file path
           echo "::notice::Local manifest file detected: ${{ inputs.manifest }}"
           LOCAL_MANIFEST_PATH="${{ inputs.manifest }}"
-          
-          # Validate local manifest file exists
           if [ ! -f "$LOCAL_MANIFEST_PATH" ]; then
             echo "::error::Local manifest file '$LOCAL_MANIFEST_PATH' not found"
             exit 1
           fi
         fi
         
-        # Export the resolved manifest path for use in later steps
-        echo "LOCAL_MANIFEST_PATH=$LOCAL_MANIFEST_PATH" >> $GITHUB_ENV
-        echo "::notice::Using manifest at: $LOCAL_MANIFEST_PATH"
-        echo "::endgroup::"
-
-    - name: Pull against manifest
-      shell: bash
-      run: |
-        echo "::group::Pulling against manifest"
-        
-        # Determine mode based on 'against' input
-        if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
-          MODE="url"
-          echo "::notice::URL mode detected"
-          echo "Source: ${{ inputs.against }}"
+        # Resolve against manifest
+        if is_url "${{ inputs.against }}"; then
+          echo "::notice::Remote against URL detected: ${{ inputs.against }}"
+          pull_manifest "${{ inputs.against }}" "${{ inputs.against-manifest-path }}" "${{ inputs.auth-token }}" "against manifest"
+        elif [ -n "${{ inputs.against }}" ] && [ -f "${{ inputs.against }}" ]; then
+          # Against is a local file - copy it to the expected location
+          echo "::notice::Local against file detected: ${{ inputs.against }}"
+          cp "${{ inputs.against }}" "${{ inputs.against-manifest-path }}"
+          echo "::notice::Copied local against file to ${{ inputs.against-manifest-path }}"
+        elif [ -n "${{ inputs.against }}" ]; then
+          # Against is specified but not a URL or existing local file - treat as git path
+          echo "::notice::Git mode detected for against source"
+          target_branch=$(get_target_branch)
+          remote_path="${{ inputs.against }}"
+          echo "::notice::Comparing different paths - Base: $remote_path, Local: ${{ inputs.manifest }}"
+          fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}"
         else
-          MODE="git"
-          echo "::notice::Git mode detected"
-          
-          # Determine target branch
-          if [ -n "${{ github.base_ref }}" ]; then
-            # In PR context - use PR base branch
-            TARGET_BRANCH="${{ github.base_ref }}"
-            echo "::notice::Using PR base branch: $TARGET_BRANCH"
-          elif [ -n "${{ inputs.base-branch }}" ]; then
-            # Use explicitly provided base branch
-            TARGET_BRANCH="${{ inputs.base-branch }}"
-            echo "::notice::Using specified base branch: $TARGET_BRANCH"
-          else
-            # Default to 'main' branch
-            TARGET_BRANCH="main"
-            echo "::notice::Using default base branch: $TARGET_BRANCH"
-          fi
-          
-          # Get manifest path (use 'against' if provided, otherwise use same as 'manifest')
-          if [ -z "${{ inputs.against }}" ]; then
-            REMOTE_PATH="${{ inputs.manifest }}"
-            echo "::notice::Comparing same manifest path between branches: $REMOTE_PATH"
-          else
-            REMOTE_PATH="${{ inputs.against }}"
-            echo "::notice::Comparing different paths - Base: $REMOTE_PATH, Local: ${{ inputs.manifest }}"
-          fi
+          # No against specified - use same manifest path from target branch
+          echo "::notice::Git mode detected for against source"
+          target_branch=$(get_target_branch)
+          remote_path="${{ inputs.manifest }}"
+          echo "::notice::Comparing same manifest path between branches: $remote_path"
+          fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}"
         fi
         
-        if [ "$MODE" = "url" ]; then
-          # URL mode - use OpenFeature CLI pull command
-          PULL_CMD="$HOME/go/bin/openfeature pull --flag-source-url \"${{ inputs.against }}\" --manifest \"${{ inputs.against-manifest-path }}\" --no-prompt"
-          
-          # Add auth token if provided
-          if [ -n "${{ inputs.auth-token }}" ]; then
-            echo "::notice::Using authentication token for pulling manifest"
-            PULL_CMD="$PULL_CMD --auth-token \"${{ inputs.auth-token }}\""
-          fi
-          
-          # Use OpenFeature CLI pull command to fetch upstream manifest
-          if ! eval $PULL_CMD; then
-            echo "::error::Failed to pull manifest from ${{ inputs.against }}"
-            exit 1
-          fi
-        else
-          # Git mode - fetch manifest from target branch
-          echo "::notice::Fetching manifest from git branch"
-          
-          # Verify the target branch exists
-          if ! git rev-parse --verify "origin/$TARGET_BRANCH" >/dev/null 2>&1; then
-            if ! git rev-parse --verify "$TARGET_BRANCH" >/dev/null 2>&1; then
-              echo "::error::Target branch '$TARGET_BRANCH' not found in local or remote repository"
-              exit 1
-            fi
-          fi
-          
-          # Fetch manifest from target branch
-          if ! git show "$TARGET_BRANCH:$REMOTE_PATH" > "${{ inputs.against-manifest-path }}" 2>/dev/null; then
-            # Try with origin/ prefix if direct branch doesn't work
-            if ! git show "origin/$TARGET_BRANCH:$REMOTE_PATH" > "${{ inputs.against-manifest-path }}" 2>/dev/null; then
-              echo "::error::Failed to fetch manifest '$REMOTE_PATH' from branch '$TARGET_BRANCH'"
-              echo "::error::Make sure the manifest file exists in the target branch"
-              exit 1
-            fi
-          fi
-          
-          echo "::notice::Successfully fetched manifest from branch $TARGET_BRANCH"
-        fi
-        
-        # Verify against manifest exists and is readable
+        # Verify against manifest exists
         if [ ! -f "${{ inputs.against-manifest-path }}" ]; then
           echo "::error::Against manifest file not found at ${{ inputs.against-manifest-path }}"
           exit 1
         fi
         
+        # Export paths for comparison step
+        echo "LOCAL_MANIFEST_PATH=$LOCAL_MANIFEST_PATH" >> $GITHUB_ENV
         MANIFEST_SIZE=$(wc -c < "${{ inputs.against-manifest-path }}")
         echo "::notice::Against manifest saved to ${{ inputs.against-manifest-path }} (${MANIFEST_SIZE} bytes)"
-        echo "upstream-manifest-size=${MANIFEST_SIZE}" >> $GITHUB_OUTPUT
+        echo "::notice::Using local manifest at: $LOCAL_MANIFEST_PATH"
         echo "::endgroup::"
 
     - name: Compare manifests
@@ -222,24 +241,23 @@ runs:
       run: |
         echo "::group::Comparing manifests"
         
-        # Create output directory for comparison results
+        # Create output directory
         mkdir -p comparison-output
         
-        # Run OpenFeature CLI compare command with YAML output
-        set +e  # Don't exit on non-zero return code
-        COMPARE_OUTPUT=$($HOME/go/bin/openfeature compare --manifest "$LOCAL_MANIFEST_PATH" --against "${{ inputs.against-manifest-path }}" --output yaml 2>&1)
+        # Run comparison
+        set +e
+        COMPARE_OUTPUT=$($CLI_PATH compare --manifest "$LOCAL_MANIFEST_PATH" --against "${{ inputs.against-manifest-path }}" --output yaml 2>&1)
         COMPARE_EXIT_CODE=$?
         set -e
         
-        # Save raw comparison output
+        # Save raw output
         echo "$COMPARE_OUTPUT" > comparison-output/raw-output.txt
         
-        # Determine if there are differences
+        # Determine differences
         HAS_DIFFERENCES="false"
         if echo "$COMPARE_OUTPUT" | grep -q "No differences found between the manifests"; then
           HAS_DIFFERENCES="false"
         elif [ -n "$COMPARE_OUTPUT" ]; then
-          # If there's output and it's not the "no differences" message, differences exist
           HAS_DIFFERENCES="true"
         fi
         
@@ -266,84 +284,61 @@ runs:
         
         echo "::endgroup::"
 
-    - name: Format output for GitHub Actions summary
+    - name: Generate Summary
       shell: bash
       run: |
         echo "::group::Generating summary"
         
-        # Determine comparison type for better summary messaging
-        IS_REMOTE_URL="false"
-        COMPARISON_CONTEXT=""
-        if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
-          IS_REMOTE_URL="true"
-          COMPARISON_CONTEXT="upstream provider"
+        # Source our functions
+        source /tmp/action_functions.sh
+        
+        # Determine comparison type
+        if is_url "${{ inputs.against }}"; then
           COMPARISON_TITLE="## 🌐 Upstream Provider Comparison"
           COMPARISON_SUBTITLE="Comparing local manifest against remote source"
+          IS_REMOTE_URL="true"
         else
-          COMPARISON_CONTEXT="git branch"
-          if [ -n "${{ github.base_ref }}" ]; then
-            TARGET_BRANCH="${{ github.base_ref }}"
-          elif [ -n "${{ inputs.base-branch }}" ]; then
-            TARGET_BRANCH="${{ inputs.base-branch }}"
-          else
-            TARGET_BRANCH="main"
-          fi
+          target_branch=$(get_target_branch)
           COMPARISON_TITLE="## 🔀 Git Branch Comparison"
-          COMPARISON_SUBTITLE="Comparing against $TARGET_BRANCH branch"
+          COMPARISON_SUBTITLE="Comparing against $target_branch branch"
+          IS_REMOTE_URL="false"
         fi
         
-        # Header with visual hierarchy
+        # Header
         echo "$COMPARISON_TITLE" >> $GITHUB_STEP_SUMMARY
         echo "*$COMPARISON_SUBTITLE*" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        # Use the step output directly instead of reading from GITHUB_OUTPUT
         HAS_DIFFERENCES="${{ steps.compare.outputs.has-differences }}"
         
         if [ "$HAS_DIFFERENCES" = "true" ]; then
-          # Status banner with contextual warning
+          # Status banner
+          echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
           if [ "$IS_REMOTE_URL" = "true" ]; then
-            echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
-            echo "> **Out of Sync** - Your local manifest differs from the $COMPARISON_CONTEXT" >> $GITHUB_STEP_SUMMARY
-            echo "> " >> $GITHUB_STEP_SUMMARY
+            echo "> **Out of Sync** - Your local manifest differs from the upstream provider" >> $GITHUB_STEP_SUMMARY
             echo "> **Source:** \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
           else
-            echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
-            echo "> **Changes Detected** - This branch modifies the flag manifest compared to $TARGET_BRANCH" >> $GITHUB_STEP_SUMMARY
+            target_branch=$(get_target_branch)
+            echo "> **Changes Detected** - This branch modifies the flag manifest compared to $target_branch" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Parse the YAML output to extract changes
+          # Parse YAML and generate change summary
           if [ -f "comparison-output/raw-output.txt" ]; then
             RAW_YAML=$(cat comparison-output/raw-output.txt)
             
-            # Parse YAML to count changes
-            # Count additions (flags that appear in against but not in local)
-            ADD_COUNT=0
-            if echo "$RAW_YAML" | grep -q "^additions:"; then
-              # Count items under additions section (lines starting with "    - type:")
-              ADD_COUNT=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep -c "^    - type:" || true)
-            fi
+            # Count changes
+            ADD_COUNT=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep -c "^    - type:" || true)
+            REMOVE_COUNT=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep -c "^    - type:" || true)
+            MODIFY_COUNT=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep -c "^    - type:" || true)
             
-            # Count removals (flags that appear in local but not in against)
-            REMOVE_COUNT=0
-            if echo "$RAW_YAML" | grep -q "^removals:"; then
-              REMOVE_COUNT=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep -c "^    - type:" || true)
-            fi
-            
-            # Count modifications (flags that exist in both but with different values)
-            MODIFY_COUNT=0
-            if echo "$RAW_YAML" | grep -q "^modifications:"; then
-              MODIFY_COUNT=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep -c "^    - type:" || true)
-            fi
-            
-            # Export counts for PR comment
+            # Export for PR comments
             echo "ADD_COUNT=$ADD_COUNT" >> $GITHUB_ENV
             echo "REMOVE_COUNT=$REMOVE_COUNT" >> $GITHUB_ENV
             echo "MODIFY_COUNT=$MODIFY_COUNT" >> $GITHUB_ENV
             echo "TOTAL_CHANGES=$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))" >> $GITHUB_ENV
             
-            # Generate colorful summary table
+            # Summary table
             echo "## 📊 Change Summary" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Change Type | Count | Description |" >> $GITHUB_STEP_SUMMARY
@@ -356,121 +351,45 @@ runs:
             
             # Build change details for PR comment
             CHANGE_DETAILS=""
-            
-            # Detailed breakdown
-            echo "## 🔍 Change Details" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            # Parse and display additions
             if [ $ADD_COUNT -gt 0 ]; then
-              echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
-              echo "> ### 🟢 New Flags Added ($ADD_COUNT)" >> $GITHUB_STEP_SUMMARY
-              echo "> The following flags are present in the **against source** but not in the **local manifest**:" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "<ul>" >> $GITHUB_STEP_SUMMARY
-              echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🟢 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
-              echo "</ul>" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              
-              # Build for PR comment
               CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 New Flags Added ($ADD_COUNT)\n"
               ADD_LIST=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟢 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${ADD_LIST}\n\n"
             fi
-            
-            # Parse and display removals
             if [ $REMOVE_COUNT -gt 0 ]; then
-              echo "> [!CAUTION]" >> $GITHUB_STEP_SUMMARY
-              echo "> ### 🔴 Flags Removed ($REMOVE_COUNT)" >> $GITHUB_STEP_SUMMARY
-              echo "> The following flags are present in the **local manifest** but not in the **against source**:" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "<ul>" >> $GITHUB_STEP_SUMMARY
-              echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🔴 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
-              echo "</ul>" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              
-              # Build for PR comment
               CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 Flags Removed ($REMOVE_COUNT)\n"
               REMOVE_LIST=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🔴 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${REMOVE_LIST}\n\n"
             fi
-            
-            # Parse and display modifications
             if [ $MODIFY_COUNT -gt 0 ]; then
-              echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
-              echo "> ### 🟡 Flags Modified ($MODIFY_COUNT)" >> $GITHUB_STEP_SUMMARY
-              echo "> The following flags have **different configurations** between manifests:" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              
-              # Extract modified flag names
-              echo "<ul>" >> $GITHUB_STEP_SUMMARY
-              echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./<li>🟡 <code>/' | sed 's/$/<\/code><\/li>/' >> $GITHUB_STEP_SUMMARY
-              echo "</ul>" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              
-              # Build for PR comment
               CHANGE_DETAILS="${CHANGE_DETAILS}### 🟡 Flags Modified ($MODIFY_COUNT)\n"
               MODIFY_LIST=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟡 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${MODIFY_LIST}\n"
             fi
             
-            # Export change details for PR comment
+            # Export for PR comment
             echo "CHANGE_DETAILS<<EOF" >> $GITHUB_ENV
             echo -e "$CHANGE_DETAILS" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
             
-            # Add configuration section (collapsible)
+            # Configuration section
             echo "## Configuration" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "<details>" >> $GITHUB_STEP_SUMMARY
             echo "<summary>View configuration details</summary>" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
-            echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| **Local Manifest** | \`$LOCAL_MANIFEST_PATH\` |" >> $GITHUB_STEP_SUMMARY
-            
-            # Determine and display the against source
-            if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
-              echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
-            else
-              # Git mode - show branch and path
-              if [ -n "${{ github.base_ref }}" ]; then
-                TARGET_BRANCH="${{ github.base_ref }}"
-              elif [ -n "${{ inputs.base-branch }}" ]; then
-                TARGET_BRANCH="${{ inputs.base-branch }}"
-              else
-                TARGET_BRANCH="main"
-              fi
-              
-              if [ -z "${{ inputs.against }}" ]; then
-                REMOTE_PATH="${{ inputs.manifest }}"
-              else
-                REMOTE_PATH="${{ inputs.against }}"
-              fi
-              
-              echo "| **Against Source** | Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\` |" >> $GITHUB_STEP_SUMMARY
-            fi
-            
-            echo "| **Strict Mode** | \`${{ inputs.strict }}\` |" >> $GITHUB_STEP_SUMMARY
+            generate_config_table "$LOCAL_MANIFEST_PATH"
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "</details>" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
-            # Add manifest diff section (collapsible)
+            # Manifest diff
             echo "## 🔄 Manifest Diff" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "<details>" >> $GITHUB_STEP_SUMMARY
             echo "<summary>View unified diff between manifests</summary>" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo '```diff' >> $GITHUB_STEP_SUMMARY
-            # Generate unified diff between the two manifest files
-            # Use diff -u for unified format, which works well with GitHub's diff syntax
-            # Order: diff -u <old/from> <new/to>
-            # We want: local as 'old/from' and against as 'new/to'
-            # This aligns with OpenFeature CLI terminology:
-            # - Additions (in against, not in local) show as + (added to get from local to against)
-            # - Removals (in local, not in against) show as - (removed to get from local to against)
-            # Suppress exit code in case files are identical or diff fails
             MANIFEST_DIFF=$(diff -u "$LOCAL_MANIFEST_PATH" "${{ inputs.against-manifest-path }}" | tail -n +3 || true)
             echo "$MANIFEST_DIFF" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
@@ -483,7 +402,7 @@ runs:
             echo "$MANIFEST_DIFF" >> $GITHUB_ENV
             echo "EOF" >> $GITHUB_ENV
             
-            # Add expandable raw YAML output
+            # Raw output
             echo "## 📄 Raw Output" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "<details>" >> $GITHUB_STEP_SUMMARY
@@ -495,15 +414,14 @@ runs:
             echo "</details>" >> $GITHUB_STEP_SUMMARY
           fi
         else
-          # Success banner with contextual messaging
+          # Success case
+          echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
           if [ "$IS_REMOTE_URL" = "true" ]; then
-            echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
             echo "> ✅ **In Sync** - Your local manifest matches the upstream provider" >> $GITHUB_STEP_SUMMARY
-            echo "> " >> $GITHUB_STEP_SUMMARY
             echo "> **Source:** \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
           else
-            echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
-            echo "> ✅ **No Changes** - The flag manifest is identical to $TARGET_BRANCH branch" >> $GITHUB_STEP_SUMMARY
+            target_branch=$(get_target_branch)
+            echo "> ✅ **No Changes** - The flag manifest is identical to $target_branch branch" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 🎉 Status" >> $GITHUB_STEP_SUMMARY
@@ -512,51 +430,25 @@ runs:
           if [ "$IS_REMOTE_URL" = "true" ]; then
             echo "Your local manifest is synchronized with the upstream provider. No drift detected! 🚀" >> $GITHUB_STEP_SUMMARY
           else
-            echo "No flag configuration changes in this branch compared to $TARGET_BRANCH. 🚀" >> $GITHUB_STEP_SUMMARY
+            target_branch=$(get_target_branch)
+            echo "No flag configuration changes in this branch compared to $target_branch. 🚀" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Add configuration section (collapsible) for success case
+          # Configuration section for success case
           echo "## Configuration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "<details>" >> $GITHUB_STEP_SUMMARY
           echo "<summary>View configuration details</summary>" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Local Manifest** | \`$LOCAL_MANIFEST_PATH\` |" >> $GITHUB_STEP_SUMMARY
-          
-          # Determine and display the against source
-          if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
-            echo "| **Against Source** | \`${{ inputs.against }}\` |" >> $GITHUB_STEP_SUMMARY
-          else
-            # Git mode - show branch and path
-            if [ -n "${{ github.base_ref }}" ]; then
-              TARGET_BRANCH="${{ github.base_ref }}"
-            elif [ -n "${{ inputs.base-branch }}" ]; then
-              TARGET_BRANCH="${{ inputs.base-branch }}"
-            else
-              TARGET_BRANCH="main"
-            fi
-            
-            if [ -z "${{ inputs.against }}" ]; then
-              REMOTE_PATH="${{ inputs.manifest }}"
-            else
-              REMOTE_PATH="${{ inputs.against }}"
-            fi
-            
-            echo "| **Against Source** | Branch \`$TARGET_BRANCH\` at \`$REMOTE_PATH\` |" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "| **Strict Mode** | \`${{ inputs.strict }}\` |" >> $GITHUB_STEP_SUMMARY
+          generate_config_table "$LOCAL_MANIFEST_PATH"
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "</details>" >> $GITHUB_STEP_SUMMARY
         fi
         
+        # Footer
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "---" >> $GITHUB_STEP_SUMMARY
-        
-        # Add contextual footer message
         if [ "$IS_REMOTE_URL" = "true" ]; then
           echo "*💡 This comparison helps detect drift between your local configuration and upstream provider*" >> $GITHUB_STEP_SUMMARY
         else
