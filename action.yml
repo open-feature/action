@@ -11,14 +11,17 @@ inputs:
     description: 'URL/remote source OR local path for git comparison (optional for PR workflows)'
     required: false
   manifest:
-    description: 'Path to local flag manifest file'
+    description: 'Path to local flag manifest file OR URL to remote manifest'
     required: false
     default: 'flags.json'
   base-branch:
     description: 'Base branch for git comparison (auto-detected in PRs)'
     required: false
   auth-token:
-    description: 'Authentication token for accessing the flag source (optional)'
+    description: 'Authentication token for accessing the against source (optional)'
+    required: false
+  manifest-auth-token:
+    description: 'Authentication token for accessing the manifest source (optional)'
     required: false
   cli-version:
     description: 'OpenFeature CLI version to use'
@@ -47,6 +50,9 @@ outputs:
   against-manifest-path:
     description: 'Path to the downloaded manifest from the against source'
     value: ${{ steps.compare.outputs.against-manifest-path }}
+  local-manifest-path:
+    description: 'Path to the local manifest file (original path or downloaded from URL)'
+    value: ${{ steps.compare.outputs.local-manifest-path }}
   summary:
     description: 'Human-readable summary of changes'
     value: ${{ steps.compare.outputs.summary }}
@@ -75,6 +81,49 @@ runs:
         
         # Verify installation
         $HOME/go/bin/openfeature version
+        echo "::endgroup::"
+
+    - name: Pull local manifest
+      shell: bash
+      run: |
+        echo "::group::Resolving local manifest"
+        
+        # Determine if manifest is a URL or local path
+        if [[ "${{ inputs.manifest }}" =~ :// ]] || [[ "${{ inputs.manifest }}" =~ ^[^/]+:[^/] ]]; then
+          # Manifest is a URL - pull it
+          echo "::notice::Remote manifest URL detected: ${{ inputs.manifest }}"
+          
+          LOCAL_MANIFEST_PATH="local-manifest.json"
+          PULL_CMD="$HOME/go/bin/openfeature pull --flag-source-url \"${{ inputs.manifest }}\" --manifest \"$LOCAL_MANIFEST_PATH\" --no-prompt"
+          
+          # Add auth token if provided
+          if [ -n "${{ inputs.manifest-auth-token }}" ]; then
+            echo "::notice::Using authentication token for pulling manifest"
+            PULL_CMD="$PULL_CMD --auth-token \"${{ inputs.manifest-auth-token }}\""
+          fi
+          
+          # Use OpenFeature CLI pull command to fetch manifest
+          if ! eval $PULL_CMD; then
+            echo "::error::Failed to pull manifest from ${{ inputs.manifest }}"
+            exit 1
+          fi
+          
+          echo "::notice::Manifest downloaded to $LOCAL_MANIFEST_PATH"
+        else
+          # Manifest is a local file path
+          echo "::notice::Local manifest file detected: ${{ inputs.manifest }}"
+          LOCAL_MANIFEST_PATH="${{ inputs.manifest }}"
+          
+          # Validate local manifest file exists
+          if [ ! -f "$LOCAL_MANIFEST_PATH" ]; then
+            echo "::error::Local manifest file '$LOCAL_MANIFEST_PATH' not found"
+            exit 1
+          fi
+        fi
+        
+        # Export the resolved manifest path for use in later steps
+        echo "LOCAL_MANIFEST_PATH=$LOCAL_MANIFEST_PATH" >> $GITHUB_ENV
+        echo "::notice::Using manifest at: $LOCAL_MANIFEST_PATH"
         echo "::endgroup::"
 
     - name: Pull against manifest
@@ -173,18 +222,12 @@ runs:
       run: |
         echo "::group::Comparing manifests"
         
-        # Validate local manifest file exists
-        if [ ! -f "${{ inputs.manifest }}" ]; then
-          echo "::error::Local manifest file '${{ inputs.manifest }}' not found"
-          exit 1
-        fi
-        
         # Create output directory for comparison results
         mkdir -p comparison-output
         
         # Run OpenFeature CLI compare command with YAML output
         set +e  # Don't exit on non-zero return code
-        COMPARE_OUTPUT=$($HOME/go/bin/openfeature compare --manifest "${{ inputs.manifest }}" --against "${{ inputs.against-manifest-path }}" --output yaml 2>&1)
+        COMPARE_OUTPUT=$($HOME/go/bin/openfeature compare --manifest "$LOCAL_MANIFEST_PATH" --against "${{ inputs.against-manifest-path }}" --output yaml 2>&1)
         COMPARE_EXIT_CODE=$?
         set -e
         
@@ -206,6 +249,7 @@ runs:
         echo "$COMPARE_OUTPUT" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
         echo "against-manifest-path=${{ inputs.against-manifest-path }}" >> $GITHUB_OUTPUT
+        echo "local-manifest-path=$LOCAL_MANIFEST_PATH" >> $GITHUB_OUTPUT
         
         # Generate summary
         if [ "$HAS_DIFFERENCES" = "true" ]; then
@@ -383,7 +427,7 @@ runs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
             echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| **Local Manifest** | \`${{ inputs.manifest }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Local Manifest** | \`$LOCAL_MANIFEST_PATH\` |" >> $GITHUB_STEP_SUMMARY
             
             # Determine and display the against source
             if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
@@ -427,7 +471,7 @@ runs:
             # - Additions (in against, not in local) show as + (added to get from local to against)
             # - Removals (in local, not in against) show as - (removed to get from local to against)
             # Suppress exit code in case files are identical or diff fails
-            MANIFEST_DIFF=$(diff -u "${{ inputs.manifest }}" "${{ inputs.against-manifest-path }}" | tail -n +3 || true)
+            MANIFEST_DIFF=$(diff -u "$LOCAL_MANIFEST_PATH" "${{ inputs.against-manifest-path }}" | tail -n +3 || true)
             echo "$MANIFEST_DIFF" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -480,7 +524,7 @@ runs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Local Manifest** | \`${{ inputs.manifest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Local Manifest** | \`$LOCAL_MANIFEST_PATH\` |" >> $GITHUB_STEP_SUMMARY
           
           # Determine and display the against source
           if [[ "${{ inputs.against }}" =~ :// ]] || [[ "${{ inputs.against }}" =~ ^[^/]+:[^/] ]]; then
