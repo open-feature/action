@@ -77,10 +77,11 @@ This action integrates seamlessly into CI/CD pipelines to:
 
 - **Automate flag validation** in pull request workflows
 - **Detect configuration drift** between environments
+- **Compare multiple flag providers** or environments directly
 - **Enforce governance** by requiring review of flag changes
 - **Generate audit trails** of all flag modifications
 
-**Recommended setup:** Use both git comparison (to see what changed in your PR) and remote comparison (to check drift from your flag management system).
+**Recommended setup:** Use both git comparison (to see what changed in your PR) and remote comparison (to check drift from your flag management system). For multi-environment setups, use remote-to-remote comparison to validate consistency.
 
 ### Security Teams
 
@@ -107,8 +108,10 @@ See the [Contributing](#contributing) section for development setup.
 - **Pull Request Validation**: Compare flag changes between feature branches and base branches automatically
 - **Branch Comparison**: Validate flag manifest changes during development workflow
 - **Remote Source Validation**: Check if local flag changes align with external flag management systems  
+- **Remote-to-Remote Comparison**: Compare flag configurations between different remote providers or environments
 - **Drift Detection**: Identify when local configurations have diverged from remote configurations
 - **Environment Synchronization**: Ensure consistency across development, staging, and production environments
+- **Multi-Provider Validation**: Compare flag configurations across different feature flag management systems
 - **Compliance Checking**: Verify that flag configurations meet organizational standards
 
 ## Features
@@ -187,9 +190,10 @@ jobs:
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `against` | URL/remote source OR local path for git comparison (optional for PR workflows) | No | - |
-| `manifest` | Path to your local flag manifest file relative to repository root | No | `flags.json` |
+| `manifest` | Path to your local flag manifest file relative to repository root OR URL to remote manifest | No | `flags.json` |
 | `base-branch` | Base branch for git comparison (auto-detected in PRs) | No | - |
-| `auth-token` | Authentication token for accessing protected flag sources (use GitHub secrets) | No | - |
+| `auth-token` | Authentication token for accessing protected against sources (use GitHub secrets) | No | - |
+| `manifest-auth-token` | Authentication token for accessing protected manifest sources (use GitHub secrets) | No | - |
 | `cli-version` | OpenFeature CLI version to use | No | `latest` |
 | `against-manifest-path` | Path where the fetched manifest from the against source will be saved locally | No | `against-flags.json` |
 | `strict` | Strict mode - fail the action if differences are found | No | `false` |
@@ -215,6 +219,7 @@ The action automatically detects the comparison mode based on the `against` inpu
 | `has-differences` | Boolean string indicating if differences were found (`"true"`/`"false"`) |
 | `comparison-result` | Raw comparison output from OpenFeature CLI in YAML format |
 | `against-manifest-path` | File path where the against manifest was saved |
+| `local-manifest-path` | File path of the local manifest (original path or downloaded from URL) |
 | `summary` | Human-readable summary of the comparison result |
 
 ## Usage Examples
@@ -249,6 +254,18 @@ The action automatically detects the comparison mode based on the `against` inpu
     against: "https://api.flagprovider.com/flags.json"
     manifest: "flags.json"
     auth-token: ${{ secrets.FLAG_TOKEN }}
+```
+
+#### Remote-to-Remote Comparison
+
+```yaml
+- name: Compare two remote sources
+  uses: open-feature/openfeature-action@v1
+  with:
+    manifest: "https://staging.flagprovider.com/flags.json"
+    against: "https://production.flagprovider.com/flags.json"
+    manifest-auth-token: ${{ secrets.STAGING_TOKEN }}
+    auth-token: ${{ secrets.PRODUCTION_TOKEN }}
 ```
 
 ### Advanced Examples
@@ -316,6 +333,34 @@ jobs:
     manifest: "new-location/flags.json"    # Current branch
     against: "old-location/flags.json"     # Base branch
     base-branch: "main"
+```
+
+#### Remote Provider Comparison
+
+```yaml
+name: Compare Flag Providers
+on: [push, workflow_dispatch]
+
+jobs:
+  compare-providers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare LaunchDarkly vs Flagsmith
+        uses: open-feature/openfeature-action@v1
+        with:
+          manifest: "https://app.launchdarkly.com/api/v2/flags/export"
+          against: "https://api.flagsmith.com/api/v1/environments/flags/"
+          manifest-auth-token: ${{ secrets.LAUNCHDARKLY_TOKEN }}
+          auth-token: ${{ secrets.FLAGSMITH_TOKEN }}
+          
+      - name: Compare staging vs production
+        uses: open-feature/openfeature-action@v1
+        with:
+          manifest: "https://staging-api.yourcompany.com/flags"
+          against: "https://api.yourcompany.com/flags"
+          manifest-auth-token: ${{ secrets.STAGING_API_TOKEN }}
+          auth-token: ${{ secrets.PRODUCTION_API_TOKEN }}
+          strict: true  # Fail if environments don't match
 ```
 
 ## Manifest Format
@@ -434,13 +479,11 @@ act pull_request -e .github/workflows/pr-validation.yml
    ```yaml
    auth-token: ${{ secrets.FLAG_SOURCE_TOKEN }}
    ```
-
 3. Test the URL manually:
 
    ```bash
    curl -H "Authorization: Bearer YOUR_TOKEN" "your-against-url"
    ```
-
 
 #### "Manifest file not found"
 
@@ -471,13 +514,11 @@ Enable debug logging by setting `ACTIONS_STEP_DEBUG` secret to `true` in your re
    auth-token: "abc123xyz"                       # ❌ Never hardcode
    ```
 
-
 2. **Use environment-specific secrets**:
 
    ```yaml
    auth-token: ${{ secrets[format('TOKEN_{0}', matrix.environment)] }}
    ```
-
 
 3. **Limit token permissions** to read-only access when possible
 4. **Rotate tokens regularly** and update GitHub secrets accordingly
@@ -492,7 +533,6 @@ Enable debug logging by setting `ACTIONS_STEP_DEBUG` secret to `true` in your re
     pull-requests: write  # Only if using PR comments
   ```
 
-
 - Use specific action versions:
 
   ```yaml
@@ -500,14 +540,12 @@ Enable debug logging by setting `ACTIONS_STEP_DEBUG` secret to `true` in your re
   uses: open-feature/openfeature-action@v1      # ❌ Moving tag
   ```
 
-
 - Pin CLI versions for reproducible builds:
 
   ```yaml
   cli-version: "v0.3.6"  # ✅ Pinned version
   cli-version: "latest"  # ❌ May change unexpectedly
   ```
-
 
 ### Handling Sensitive Data
 

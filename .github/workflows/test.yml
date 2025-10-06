@@ -463,3 +463,65 @@ jobs:
           manifest: protocol-test.json
           strict: false
           post-pr-comment: false
+
+  test-remote-to-remote:
+    runs-on: ubuntu-latest
+    name: Test remote-to-remote manifest comparison
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Test remote manifest against remote against
+        uses: ./
+        id: remote-to-remote
+        with:
+          manifest: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          post-pr-comment: false
+          
+      - name: Verify identical remote manifests
+        run: |
+          echo "Has differences: ${{ steps.remote-to-remote.outputs.has-differences }}"
+          echo "Local manifest path: ${{ steps.remote-to-remote.outputs.local-manifest-path }}"
+          echo "Against manifest path: ${{ steps.remote-to-remote.outputs.against-manifest-path }}"
+          
+          if [ "${{ steps.remote-to-remote.outputs.has-differences }}" = "true" ]; then
+            echo "::error::Expected no differences for identical remote manifests!"
+            exit 1
+          fi
+          echo "✅ Correctly identified identical remote manifests"
+          
+      - name: Test different remote manifests
+        run: |
+          # Create a different manifest to upload somewhere accessible
+          cat > different-manifest.json << EOF
+          {
+            "flags": {
+              "remoteTestFlag": {
+                "flagType": "boolean",
+                "defaultValue": true,
+                "description": "A different flag for remote testing"
+              }
+            }
+          }
+          EOF
+          
+      - name: Test remote vs different remote (simulated)
+        uses: ./
+        id: different-remotes
+        with:
+          manifest: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          against: different-manifest.json  # Use local file as "against" to simulate different remote
+          post-pr-comment: false
+          
+      - name: Verify different manifests detected
+        run: |
+          echo "Has differences: ${{ steps.different-remotes.outputs.has-differences }}"
+          echo "Summary: ${{ steps.different-remotes.outputs.summary }}"
+          
+          if [ "${{ steps.different-remotes.outputs.has-differences }}" = "false" ]; then
+            echo "::error::Expected differences between different manifests!"
+            exit 1
+          fi
+          echo "✅ Correctly detected differences between remote and local manifests"
