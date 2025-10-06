@@ -173,6 +173,12 @@ runs:
       run: |
         echo "::group::Comparing manifests"
         
+        # Validate local manifest file exists
+        if [ ! -f "${{ inputs.manifest }}" ]; then
+          echo "::error::Local manifest file '${{ inputs.manifest }}' not found"
+          exit 1
+        fi
+        
         # Create output directory for comparison results
         mkdir -p comparison-output
         
