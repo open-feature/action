@@ -9,6 +9,7 @@
 
 <h2 align="center">OpenFeature Action</h2>
 <!-- x-hide-in-docs-end -->
+
 <!-- The 'github-badges' class is used in the docs -->
 <p align="center" class="github-badges">
   <a href="https://github.com/orgs/open-feature/projects/17">
@@ -17,7 +18,14 @@
   <a href="https://cloud-native.slack.com/archives/C07DY4TUDK6">
     <img alt="Slack" src="https://img.shields.io/badge/slack-%40cncf%2Fopenfeature-brightgreen?style=flat&logo=slack" />
   </a>
+  <a href="https://github.com/open-feature/openfeature-action/releases">
+    <img alt="GitHub release" src="https://img.shields.io/github/v/release/open-feature/openfeature-action" />
+  </a>
+  <a href="LICENSE">
+    <img alt="License" src="https://img.shields.io/github/license/open-feature/openfeature-action" />
+  </a>
 </p>
+
 <!-- x-hide-in-docs-start -->
 
 > [!CAUTION]
@@ -25,9 +33,74 @@
 > Feel free to give it a shot and provide feedback, but expect breaking changes.
 
 [OpenFeature](https://openfeature.dev) is an open specification that provides a vendor-agnostic, community-driven API for feature flagging that works with your favorite feature flag management tool or in-house solution.
+
 <!-- x-hide-in-docs-end -->
 
-The OpenFeature GitHub Action compares OpenFeature flag manifests between your local configuration stored in your git repository, and/or a remote source using the [OpenFeature CLI](https://github.com/open-feature/cli). This action helps teams maintain consistency between their local feature flag configurations and centralized flag management systems. It also enables for **Feature-Flag Driven Development** by providing gitops for your feature flags.
+The OpenFeature GitHub Action compares OpenFeature flag manifests between your local configuration stored in your git repository, and/or a remote source using the [OpenFeature CLI](https://github.com/open-feature/cli). This action helps teams maintain consistency between their local feature flag configurations and centralized flag management systems. It also enables **Feature-Flag Driven Development** by providing gitops for your feature flags.
+
+> **Note:** This project is being donated to the [Cloud Native Computing Foundation (CNCF)](https://www.cncf.io/) as part of the OpenFeature ecosystem.
+
+## Table of Contents
+
+- [For Different Users](#for-different-users)
+  - [New to Feature Flags?](#new-to-feature-flags)
+  - [DevOps Engineers](#devops-engineers)
+  - [Security Teams](#security-teams)
+  - [Contributors](#contributors)
+- [Use Cases](#use-cases)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Inputs & Outputs](#inputs--outputs)
+- [Usage Examples](#usage-examples)
+- [Manifest Format](#manifest-format)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Security](#security)
+- [Support & Community](#support--community)
+
+## For Different Users
+
+### New to Feature Flags?
+
+Feature flags (also called feature toggles) allow you to control which features are enabled in your application without deploying new code. This action helps you:
+
+- **Track changes** to your feature flag configuration
+- **Prevent drift** between your local configs and production
+- **Review flag changes** in pull requests before they go live
+
+**Quick example:** If you have a feature flag for a new UI design, this action will notify you when someone changes the flag's default value from "off" to "on", helping you catch unintended changes before deployment.
+
+### DevOps Engineers
+
+This action integrates seamlessly into CI/CD pipelines to:
+
+- **Automate flag validation** in pull request workflows
+- **Detect configuration drift** between environments
+- **Enforce governance** by requiring review of flag changes
+- **Generate audit trails** of all flag modifications
+
+**Recommended setup:** Use both git comparison (to see what changed in your PR) and remote comparison (to check drift from your flag management system).
+
+### Security Teams
+
+Use this action for security and compliance:
+
+- **Configuration drift detection** - Know when local configs diverge from production
+- **Change auditing** - Every flag change is tracked and visible in pull requests
+- **Access control** - Require code review for flag changes just like any other code
+- **Environment consistency** - Ensure development matches production flag states
+
+### Contributors
+
+Want to contribute? This action is built with:
+
+- **GitHub Actions** composite action pattern
+- **OpenFeature CLI** for the heavy lifting
+- **Bash scripts** for orchestration
+- **YAML parsing** for structured output
+
+See the [Contributing](#contributing) section for development setup.
 
 ## Use Cases
 
@@ -48,60 +121,68 @@ The OpenFeature GitHub Action compares OpenFeature flag manifests between your l
 - ⚙️ **Flexible Configuration** - Support for various protocols and git branch comparisons
 - 🛡️ **Error Handling** - Graceful handling of network issues, missing files, and CLI failures
 - 🔧 **CI/CD Ready** - Designed for seamless integration into existing workflows
+- 💬 **Smart PR Comments** - Automatically posts/updates comments on pull requests with differences
 
 ## Prerequisites
 
-- GitHub Actions workflow
-- OpenFeature manifest file in your repository or on a remote
-- For git branch comparison: `fetch-depth: 0` in your checkout action (to access branch history)
-- For remote source comparison: Access to a remote manifest source (URL or provider)
-- (Optional) Authentication token for protected sources
+- **GitHub Actions workflow**
+- **Git repository** with OpenFeature manifest file
+- **For git branch comparison**: `fetch-depth: 0` in your checkout action (to access branch history)
+- **For remote source comparison**: Access to a remote manifest source (URL or provider)
+- **(Optional)** Authentication token for protected sources
+
+> **Note:** The action uses the OpenFeature CLI, which is automatically installed during the workflow run.
 
 ## Quick Start
 
-Add this action to your workflow to compare flag manifests:
+### For Pull Request Workflows (Recommended)
 
-**For Pull Request workflows (compares against base branch):**
+This is the simplest setup - just compare your changes against the target branch:
 
 ```yaml
-name: Compare Flag Manifests  
+name: Validate Flag Changes
 on: pull_request
 
 jobs:
-  compare-manifests:
+  validate-flags:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Needed for git branch comparison
+          fetch-depth: 0  # Required for git comparison
       
       - name: Compare flag manifests
-        uses: openfeature/openfeature-action@v1
+        uses: open-feature/openfeature-action@v1
         with:
           manifest: "flags.json"
           # Automatically compares against PR base branch
 ```
 
-**For remote source comparison:**
+### For Remote Source Comparison
+
+Compare your local manifest against a remote flag management system:
 
 ```yaml
-name: Compare Flag Manifests
+name: Check Flag Drift
 on: [push, pull_request]
 
 jobs:
-  compare-manifests:
+  check-drift:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
-      - name: Compare flag manifests
-        uses: openfeature/openfeature-action@v1
+      - name: Compare against production flags
+        uses: open-feature/openfeature-action@v1
         with:
-          against: "https://your-remote-source.com/flags.yml"
-          manifest: "openfeature.yml"
+          against: "https://your-flag-provider.com/api/flags"
+          manifest: "flags.json"
+          auth-token: ${{ secrets.FLAG_PROVIDER_TOKEN }}
 ```
 
-## Inputs
+## Inputs & Outputs
+
+### Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
@@ -112,6 +193,7 @@ jobs:
 | `cli-version` | OpenFeature CLI version to use | No | `latest` |
 | `against-manifest-path` | Path where the fetched manifest from the against source will be saved locally | No | `against-flags.json` |
 | `strict` | Strict mode - fail the action if differences are found | No | `false` |
+| `post-pr-comment` | Post a comment on the PR when differences are detected | No | `true` |
 
 ### Mode Detection
 
@@ -126,281 +208,88 @@ The action automatically detects the comparison mode based on the `against` inpu
 - If `base-branch` is provided: Uses the specified branch
 - Otherwise: Defaults to `main` branch
 
-## Outputs
-
-The action outputs it's findings automatically in the summaries/pr-comments, but you may also retrieve them and do what you like with them.
+### Outputs
 
 | Output | Description |
 |--------|-------------|
 | `has-differences` | Boolean string indicating if differences were found (`"true"`/`"false"`) |
-| `comparison-result` | Raw comparison output from OpenFeature CLI in the specified format |
+| `comparison-result` | Raw comparison output from OpenFeature CLI in YAML format |
 | `against-manifest-path` | File path where the against manifest was saved |
 | `summary` | Human-readable summary of the comparison result |
 
-### Understanding Comparison Results
-
-The action compares manifests and identifies:
-
-- **Added flags**: Flags present in local but not in against
-- **Removed flags**: Flags present in against but not in local  
-- **Modified flags**: Flags with different configurations between local and against
-- **Unchanged flags**: Flags that are identical in both manifests
-
-#### Example Outputs
-
-**When flags are added locally:**
-
-```
-🔍 Flag manifest differences detected between local and against sources
-
-Added Flags:
-├── newLocalFlag (string)
-└── anotherNewFlag (number)
-```
-
-**When flags are removed locally:**
-
-```
-🔍 Flag manifest differences detected between local and against sources
-
-Removed Flags:
-├── exampleStr (string)
-└── exampleNum (number)
-```
-
-**When flags are modified:**
-
-```
-🔍 Flag manifest differences detected between local and against sources
-
-Modified Flags:
-└── exampleBool
-    ├── defaultValue: false → true
-    └── description: "Original description" → "Modified description"
-```
-
-**When manifests are identical:**
-
-```
-✅ No differences found between local and against flag manifests
-```
-
-**Complex scenario with multiple changes (JSON format):**
-
-```json
-{
-  "added": ["brandNewFeature", "anotherNewFlag"],
-  "removed": ["exampleStr", "exampleNum"],
-  "modified": {
-    "exampleBool": {
-      "defaultValue": {"old": false, "new": true}
-    }
-  }
-}
-```
-
 ## Usage Examples
 
-### Git Branch Comparison (Recommended for PRs)
+### Basic Examples
 
-**Minimal configuration for pull request workflows:**
+#### Minimal PR Validation
 
 ```yaml
-- name: Compare manifests
-  uses: openfeature/openfeature-action@v1
+- name: Validate flag changes
+  uses: open-feature/openfeature-action@v1
   with:
     manifest: "flags.json"
-    # Automatically uses PR base branch
 ```
 
-**Compare against a specific branch:**
+#### Compare Against Specific Branch
 
-```yaml  
-- name: Compare manifests
-  uses: openfeature/openfeature-action@v1
+```yaml
+- name: Compare against develop
+  uses: open-feature/openfeature-action@v1
   with:
     manifest: "flags.json"
     base-branch: "develop"
 ```
 
-**Compare different manifest paths between branches:**
+#### Compare Against Remote Source
 
 ```yaml
-- name: Compare manifests  
-  uses: openfeature/openfeature-action@v1
+- name: Check against production
+  uses: open-feature/openfeature-action@v1
   with:
-    manifest: "new-location/flags.json"    # Current branch
-    against: "old-location/flags.json"     # Base branch
-    base-branch: "main"
-```
-
-### Remote Source Comparison
-
-**Compare with remote URL:**
-
-```yaml
-- name: Compare manifests
-  uses: openfeature/openfeature-action@v1
-  with:
-    against: "https://api.example.com/flags.yml"
-    manifest: "./config/flags.yml"
-```
-
-**Git repository via SSH:**
-
-```yaml
-- name: Compare manifests
-  uses: openfeature/openfeature-action@v1
-  with:
-    against: "git@github.com:org/config-repo.git#main:flags.json"
+    against: "https://api.flagprovider.com/flags.json"
     manifest: "flags.json"
+    auth-token: ${{ secrets.FLAG_TOKEN }}
 ```
 
-### Fail on Differences
+### Advanced Examples
 
-Fail the workflow if differences are detected:
+#### Strict Mode (Fail on Differences)
 
 ```yaml
-- name: Ensure manifest sync
-  uses: openfeature/openfeature-action@v1
+- name: Enforce flag sync
+  uses: open-feature/openfeature-action@v1
   with:
-    against: "https://api.example.com/flags.yml"
-    manifest: "openfeature.yml"
+    against: "https://api.flagprovider.com/flags.json"
+    manifest: "flags.json"
     strict: true
 ```
 
-### Use Comparison Results
-
-Access the comparison results in subsequent steps:
+#### Use Comparison Results
 
 ```yaml
 - name: Compare manifests
   id: compare
-  uses: openfeature/openfeature-action@v1
+  uses: open-feature/openfeature-action@v1
   with:
-    against: "https://api.example.com/flags.yml"
-    manifest: "openfeature.yml"
+    against: "https://api.flagprovider.com/flags.json"
+    manifest: "flags.json"
 
-- name: Post to Slack if differences found
+- name: Notify Slack on differences
   if: steps.compare.outputs.has-differences == 'true'
   run: |
     curl -X POST -H 'Content-type: application/json' \
-      --data '{"text":"🚨 Flag manifest differences detected: ${{ steps.compare.outputs.summary }}"}' \
+      --data '{"text":"🚨 Flag drift detected: ${{ steps.compare.outputs.summary }}"}' \
       ${{ secrets.SLACK_WEBHOOK }}
 ```
 
-### Different Output Formats
-
-Get comparison results in different formats:
+#### Multi-Environment Validation
 
 ```yaml
-- name: JSON comparison
-  uses: openfeature/openfeature-action@v1
-  with:
-    against: "https://api.example.com/flags.yml"
-    manifest: "openfeature.yml"
-    output-format: "json"
-
-- name: Text comparison
-  uses: openfeature/openfeature-action@v1
-  with:
-    against: "https://api.example.com/flags.yml"
-    manifest: "openfeature.yml"
-    output-format: "text"
-```
-
-### Specify CLI Version
-
-Use a specific version of the OpenFeature CLI:
-
-```yaml
-- name: Compare with specific CLI version
-  uses: openfeature/openfeature-action@v1
-  with:
-    against: "https://api.example.com/flags.yml"
-    manifest: "openfeature.yml"
-    cli-version: "v0.3.6"  # Pin to specific version
-```
-
-Available versions: See [OpenFeature CLI releases](https://github.com/open-feature/cli/releases)
-
-### Authenticated Pull
-
-Use authentication token for protected flag sources:
-
-```yaml
-- name: Compare with authenticated source
-  uses: openfeature/openfeature-action@v1
-  with:
-    against: "https://api.example.com/flags.yml"
-    manifest: "openfeature.yml"
-    auth-token: ${{ secrets.FLAG_SOURCE_TOKEN }}
-```
-
-## Integration Examples
-
-### Pull Request Validation
-
-**Simple PR validation (compares against base branch):**
-
-```yaml
-name: Validate Flag Changes
-on:
-  pull_request:
-    paths:
-      - 'flags.json'
-      - 'config/flags/**'
+name: Multi-Environment Flag Validation
+on: [push, pull_request]
 
 jobs:
-  validate-flags:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Required for git branch comparison
-      
-      - name: Validate flag manifest changes
-        uses: openfeature/openfeature-action@v1
-        id: validate
-        with:
-          manifest: "flags.json"
-          # Automatically compares against PR base branch
-```
-
-**PR validation against remote source:**
-
-```yaml
-name: Validate Flag Changes
-on:
-  pull_request:
-    paths:
-      - 'openfeature.yml'
-
-jobs:
-  validate-flags:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Validate against remote source
-        uses: openfeature/openfeature-action@v1
-        with:
-          against: ${{ secrets.FLAG_MANAGEMENT_URL }}
-          manifest: "openfeature.yml"
-          auth-token: ${{ secrets.FLAG_MANAGEMENT_TOKEN }}
-          strict: false
-```
-
-### Multi-Environment Comparison
-
-Compare against different environments:
-
-```yaml
-name: Multi-Environment Flag Comparison
-on: [push, workflow_dispatch]
-
-jobs:
-  compare-environments:
+  validate-environments:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -409,103 +298,288 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Compare with ${{ matrix.environment }}
-        uses: openfeature/openfeature-action@v1
+      - name: Validate ${{ matrix.environment }}
+        uses: open-feature/openfeature-action@v1
         with:
           against: ${{ secrets[format('FLAG_URL_{0}', upper(matrix.environment))] }}
-          manifest: "openfeature.yml"
-          against-manifest-path: "${{ matrix.environment }}-flags.yml"
-          output-format: "markdown"
+          manifest: "flags.json"
+          auth-token: ${{ secrets[format('FLAG_TOKEN_{0}', upper(matrix.environment))] }}
+          against-manifest-path: "${{ matrix.environment }}-flags.json"
 ```
 
-## Error Handling
+#### Different Manifest Paths
 
-The action includes comprehensive error handling for common scenarios:
+```yaml
+- name: Compare different paths
+  uses: open-feature/openfeature-action@v1
+  with:
+    manifest: "new-location/flags.json"    # Current branch
+    against: "old-location/flags.json"     # Base branch
+    base-branch: "main"
+```
 
-- **Missing Local Manifest**: Action fails with clear error message
-- **Network Issues**: Graceful handling of remote source connectivity problems
-- **Invalid Manifests**: Clear error reporting for malformed YAML/JSON
-- **CLI Installation Failures**: Automatic retry and fallback mechanisms
+## Manifest Format
+
+This action supports OpenFeature manifest files in JSON or YAML format. The manifest format differs from basic feature flag configurations:
+
+### OpenFeature Manifest Format
+
+```json
+{
+  "flags": {
+    "enableNewUI": {
+      "state": "ENABLED",
+      "variants": {
+        "on": true,
+        "off": false
+      },
+      "defaultVariant": "off",
+      "targeting": {}
+    },
+    "featureToggle": {
+      "state": "ENABLED", 
+      "variants": {
+        "control": "control-experience",
+        "treatment": "new-experience"
+      },
+      "defaultVariant": "treatment",
+      "targeting": {
+        "if": [
+          {
+            "in": [
+              {"var": "userId"},
+              ["user-1", "user-2"]
+            ]
+          },
+          "treatment",
+          "control"
+        ]
+      }
+    }
+  }
+}
+```
+
+### Key Properties
+
+- **`state`**: `"ENABLED"` or `"DISABLED"` - whether the flag is active
+- **`variants`**: Object defining possible values for the flag
+- **`defaultVariant`**: Which variant to use when targeting doesn't match
+- **`targeting`**: JSON Logic rules for determining which variant to serve
+
+For more details, see the [OpenFeature Flag Configuration Specification](https://openfeature.dev/specification/sections/flag-configuration).
+
+## Testing
+
+This repository includes comprehensive tests to ensure reliability:
+
+### Test Types
+
+1. **Integration Tests** (`pr-validation.yml`)
+   - **Purpose**: Real-world testing that simulates actual usage
+   - **What it tests**: Both git comparison and remote source comparison
+   - **When it runs**: On PRs that modify `flags.json`
+
+2. **Feature Tests** (`test.yml`)
+   - **Purpose**: Test individual features and error handling
+   - **What it tests**: Different manifest scenarios, CLI versions, error conditions
+   - **When it runs**: On pushes and PRs
+
+3. **Git Mode Tests** (`test-git-mode.yml`)
+   - **Purpose**: Specifically test git branch comparison functionality
+   - **What it tests**: Branch detection, path mapping, minimal configuration
+   - **When it runs**: On flag changes and workflow modifications
+
+### Running Tests Locally
+
+You can test this action locally using [act](https://github.com/nektos/act):
+
+```bash
+# Test the basic functionality
+act -j test-action
+
+# Test git mode functionality  
+act -j test-git-mode
+
+# Test with a specific event
+act pull_request -e .github/workflows/pr-validation.yml
+```
+
+### Test Scenarios Covered
+
+- ✅ **Added flags**: Local manifest has flags not in remote
+- ✅ **Removed flags**: Remote has flags not in local manifest  
+- ✅ **Modified flags**: Same flags with different configurations
+- ✅ **Identical manifests**: No differences detected
+- ✅ **Mixed changes**: Complex scenarios with multiple types of changes
+- ✅ **Error handling**: Missing files, network issues, invalid manifests
+- ✅ **CLI versions**: Compatibility with different OpenFeature CLI versions
+- ✅ **Authentication**: Token-based access to protected sources
 
 ## Troubleshooting
 
-### Action fails with "CLI installation failed"
+### Common Issues
 
-1. Check if the specified CLI version exists in the [OpenFeature CLI releases](https://github.com/open-feature/cli/releases)
+#### "CLI installation failed"
+
+1. Check if the specified CLI version exists in [OpenFeature CLI releases](https://github.com/open-feature/cli/releases)
 2. Verify network connectivity to GitHub from your runner
 3. Try using `cli-version: "latest"` to get the most recent version
 
-### Action fails with "Failed to pull manifest from against source"
+#### "Failed to pull manifest from against source"
 
-1. Verify the `against` URL is accessible
-2. Check if authentication is required for your against source
-   - If so, provide the `auth-token` input parameter
-   - Ensure the token has proper permissions to access the resource
-3. Ensure the against source returns valid manifest content
-4. Test the URL manually: `curl -L -H "Authorization: Bearer YOUR_TOKEN" "your-against-url"`
+1. Verify the `against` URL is accessible and returns valid JSON/YAML
+2. Check if authentication is required:
 
-### Comparison results are empty
+   ```yaml
+   auth-token: ${{ secrets.FLAG_SOURCE_TOKEN }}
+   ```
 
-1. Verify both manifest files are valid OpenFeature format
-2. Check that the local manifest file exists at the specified path
-3. Ensure the CLI `compare` command supports your manifest format
-4. Try different `output-format` values to see if one works
+3. Test the URL manually:
 
-### Permission Issues
+   ```bash
+   curl -H "Authorization: Bearer YOUR_TOKEN" "your-against-url"
+   ```
 
-If you encounter permission errors, ensure you're using the `auth-token` input:
 
-```yaml
-- name: Compare manifests
-  uses: openfeature/openfeature-action@v1
-  with:
-    against: "https://api.example.com/flags.yml"
-    manifest: "openfeature.yml"
-    auth-token: ${{ secrets.FLAG_AUTH_TOKEN }}
-```
+#### "Manifest file not found"
 
-## Security Best Practices
+1. Verify the manifest file exists at the specified path
+2. Check the file path is relative to the repository root
+3. For git comparisons, ensure the file exists in the target branch
 
-### Handling Authentication Tokens
+#### Git Comparison Issues
+
+1. Ensure `fetch-depth: 0` is set in your checkout action
+2. Verify the target branch exists and is accessible
+3. Check that the manifest path exists in both branches
+
+### Debug Mode
+
+Enable debug logging by setting `ACTIONS_STEP_DEBUG` secret to `true` in your repository.
+
+## Security
+
+### Best Practices
+
+#### Authentication Tokens
 
 1. **Always use GitHub Secrets** for authentication tokens:
 
    ```yaml
    auth-token: ${{ secrets.FLAG_SOURCE_TOKEN }}  # ✅ Good
-   auth-token: "abc123xyz"                       # ❌ Never hardcode tokens
+   auth-token: "abc123xyz"                       # ❌ Never hardcode
    ```
 
-2. **Use environment-specific secrets** for different stages:
+
+2. **Use environment-specific secrets**:
 
    ```yaml
    auth-token: ${{ secrets[format('TOKEN_{0}', matrix.environment)] }}
    ```
 
-3. **Limit token permissions** to read-only access when possible
 
+3. **Limit token permissions** to read-only access when possible
 4. **Rotate tokens regularly** and update GitHub secrets accordingly
 
-### Secure Workflow Configuration
+#### Workflow Security
 
-- Set appropriate permissions for your workflow:
+- Set appropriate permissions:
 
   ```yaml
   permissions:
     contents: read
-    pull-requests: write  # Only if commenting on PRs
+    pull-requests: write  # Only if using PR comments
   ```
 
-- Use specific action versions instead of tags:
+
+- Use specific action versions:
 
   ```yaml
-  uses: openfeature/openfeature-action@v1.2.3  # Specific version
+  uses: open-feature/openfeature-action@v1.2.3  # ✅ Specific version
+  uses: open-feature/openfeature-action@v1      # ❌ Moving tag
   ```
 
-- Pin CLI version for reproducible builds:
+
+- Pin CLI versions for reproducible builds:
 
   ```yaml
-  cli-version: "v0.3.6"  # Specific CLI version
+  cli-version: "v0.3.6"  # ✅ Pinned version
+  cli-version: "latest"  # ❌ May change unexpectedly
   ```
+
+
+### Handling Sensitive Data
+
+- Never commit flag configurations with production secrets
+- Use separate manifests for different environments
+- Audit flag changes just like code changes
+- Consider using encrypted manifests for sensitive configurations
+
+## Support & Community
+
+### Getting Help
+
+- 📖 **Documentation**: [OpenFeature Documentation](https://openfeature.dev/)
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/open-feature/openfeature-action/issues)
+- 💬 **Community Chat**: [CNCF Slack #openfeature](https://cloud-native.slack.com/archives/C0344AANLA1)
+- 🛠️ **CLI Issues**: [OpenFeature CLI Repository](https://github.com/open-feature/cli)
+
+### Community
+
+- **CNCF Slack Channels**:
+  - [#openfeature](https://cloud-native.slack.com/archives/C0344AANLA1) - General discussion
+  - [#openfeature-cli](https://cloud-native.slack.com/archives/C07DY4TUDK6) - CLI-specific topics
+
+- **Regular Meetings**: [Community Calls](https://zoom-lfx.platform.linuxfoundation.org/meetings/openfeature)
+
+- **Social Media**:
+  - Twitter: [@openfeature](https://twitter.com/openfeature)
+  - LinkedIn: [OpenFeature](https://www.linkedin.com/company/openfeature/)
+
+### Contributing
+
+We welcome contributions! Here's how to get started:
+
+1. **Fork the repository** and create a feature branch
+2. **Make your changes** and add tests if needed
+3. **Test locally** using the test workflows
+4. **Submit a pull request** with a clear description
+
+#### Development Setup
+
+```bash
+# Clone your fork
+git clone https://github.com/YOUR_USERNAME/openfeature-action.git
+cd openfeature-action
+
+# Test your changes
+act -j test-action
+```
+
+#### Code Style
+
+- Use clear, descriptive commit messages
+- Follow existing shell script conventions
+- Add tests for new features
+- Update documentation for any changes
+
+### Support the Project
+
+- ⭐ **Star this repository** to show your support
+- 🐛 **Report bugs** and suggest improvements
+- 📝 **Contribute** code, documentation, or examples
+- 🗣️ **Share** your experience with the community
+
+### Project Contributors
+
+Thanks to all our contributors:
+
+<a href="https://github.com/open-feature/openfeature-action/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=open-feature/openfeature-action" alt="Pictures of the folks who have contributed to the project" />
+</a>
+
+Made with [contrib.rocks](https://contrib.rocks).
 
 ## Compatibility
 
@@ -517,63 +591,22 @@ If you encounter permission errors, ensure you're using the `auth-token` input:
 ### OpenFeature CLI Versions
 
 - **Default**: Latest stable release
-- **Stable Versions**: v0.3.6, v0.3.5, v0.3.4, etc. (see [CLI releases](https://github.com/open-feature/cli/releases))
-- **Version Selection**: Use `cli-version` input to pin a specific version (e.g., `v0.3.6`)
+- **Stable Versions**: v0.3.6, v0.3.5, v0.3.4, etc. ([CLI releases](https://github.com/open-feature/cli/releases))
+- **Version Selection**: Use `cli-version` input to pin a specific version
 - **Format**: Version tags must include the `v` prefix (e.g., `v0.3.6`, not `0.3.6`)
 
 ### Manifest Formats
 
-- JSON (`.json`)
-- YAML (`.yml`, `.yaml`)
-- Must conform to [OpenFeature manifest schema](https://openfeature.dev/specification/sections/flag-configuration)
-
-## Default Behaviors
-
-| Behavior | Default Value | Notes |
-|----------|--------------|--------|
-| Local manifest path | `flags.json` | Relative to repository root |
-| Against manifest save location | `against-flags.json` | Saved in workspace |
-| Output format | `tree` | Human-readable tree format |
-| Fail on differences | `false` | Won't fail the workflow by default |
-| CLI version | `latest` | Fetches the most recent stable release |
-| Authentication | None | Only required for protected sources |
+- **JSON** (`.json`) - Recommended for most use cases
+- **YAML** (`.yml`, `.yaml`) - Good for complex configurations
+- **Schema**: Must conform to [OpenFeature manifest schema](https://openfeature.dev/specification/sections/flag-configuration)
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Support
-
-- [OpenFeature Documentation](https://openfeature.dev/)
-- [OpenFeature CLI Repository](https://github.com/open-feature/cli)
-- [GitHub Issues](https://github.com/openfeature/action/issues)
-- [OpenFeature Slack](https://cloud-native.slack.com/archives/C0344AANLA1)
-
-### Get Involved
-
-- **CNCF Slack**: Join the conversation in the [#openfeature](https://cloud-native.slack.com/archives/C0344AANLA1) and [#openfeature-cli](https://cloud-native.slack.com/archives/C07DY4TUDK6) channel
-- **Regular Meetings**: Attend our [community calls](https://zoom-lfx.platform.linuxfoundation.org/meetings/openfeature)
-- **GitHub Issues**: Report bugs or request features in our [issue tracker](https://github.com/open-feature/action/issues)
-- **Social Media**:
-  - Twitter: [@openfeature](https://twitter.com/openfeature)
-  - LinkedIn: [OpenFeature](https://www.linkedin.com/company/openfeature/)
-
-For more information, visit our [community page](https://openfeature.dev/community/).
-
-### Support the project
-
-- Give this repo a ⭐️!
-- Share your experience and contribute back to the project
-
-### Thanks to everyone who has already contributed
-
-<a href="https://github.com/open-feature/action/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=open-feature/cli" alt="Pictures of the folks who have contributed to the project" />
-</a>
-
-Made with [contrib.rocks](https://contrib.rocks).
-
 ---
 
-*Part of the [OpenFeature](https://openfeature.dev/) ecosystem*
+*Part of the [OpenFeature](https://openfeature.dev/) ecosystem - A [CNCF](https://www.cncf.io/) project*
+
 <!-- x-hide-in-docs-end -->
