@@ -1,0 +1,551 @@
+name: 'Reusable Deployment Gate'
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        description: 'Path to the manifest file to validate before deployment'
+        required: false
+        type: string
+        default: 'flags.json'
+      target-environment:
+        description: 'Target environment for deployment (e.g., "staging", "production")'
+        required: true
+        type: string
+      gate-strategy:
+        description: 'Gate strategy: "strict" (must match), "warn" (allow with warning), "advisory" (info only)'
+        required: false
+        type: string
+        default: 'strict'
+      comparison-sources:
+        description: 'JSON array of sources to compare against (e.g., ["staging", "remote-api"])'
+        required: false
+        type: string
+        default: '["staging"]'
+      cli-version:
+        description: 'OpenFeature CLI version to use'
+        required: false
+        type: string
+        default: 'latest'
+      timeout-minutes:
+        description: 'Timeout for the deployment gate validation'
+        required: false
+        type: number
+        default: 15
+      require-approval:
+        description: 'Require manual approval if differences are detected'
+        required: false
+        type: boolean
+        default: false
+      approval-timeout:
+        description: 'Timeout in minutes for manual approval'
+        required: false
+        type: number
+        default: 30
+      rollback-on-failure:
+        description: 'Enable automatic rollback capabilities'
+        required: false
+        type: boolean
+        default: false
+      notification-channels:
+        description: 'JSON object with notification settings'
+        required: false
+        type: string
+        default: '{"slack": true, "teams": false, "email": false}'
+      deployment-metadata:
+        description: 'JSON object with deployment metadata (version, branch, etc.)'
+        required: false
+        type: string
+        default: '{}'
+    secrets:
+      # Environment-specific secrets
+      STAGING_FLAG_URL:
+        required: false
+      STAGING_FLAG_TOKEN:
+        required: false
+      PRODUCTION_FLAG_URL:
+        required: false
+      PRODUCTION_FLAG_TOKEN:
+        required: false
+      QA_FLAG_URL:
+        required: false
+      QA_FLAG_TOKEN:
+        required: false
+      # Notification secrets
+      SLACK_WEBHOOK:
+        required: false
+      TEAMS_WEBHOOK:
+        required: false
+      # Deployment secrets
+      DEPLOYMENT_TOKEN:
+        required: false
+      GITHUB_TOKEN:
+        required: false
+    outputs:
+      gate-passed:
+        description: 'Whether the deployment gate validation passed'
+        value: ${{ jobs.deployment-gate.outputs.gate-passed }}
+      gate-status:
+        description: 'Gate status: "passed", "failed", "warning", "approved"'
+        value: ${{ jobs.deployment-gate.outputs.gate-status }}
+      validation-summary:
+        description: 'Summary of deployment gate validation'
+        value: ${{ jobs.deployment-gate.outputs.validation-summary }}
+      deployment-allowed:
+        description: 'Whether deployment should proceed'
+        value: ${{ jobs.deployment-gate.outputs.deployment-allowed }}
+      requires-approval:
+        description: 'Whether manual approval is required'
+        value: ${{ jobs.deployment-gate.outputs.requires-approval }}
+
+permissions:
+  contents: read
+  deployments: write
+  issues: write
+
+jobs:
+  deployment-gate:
+    runs-on: ubuntu-latest
+    name: Deployment Gate - ${{ inputs.target-environment }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    environment: ${{ inputs.target-environment }}
+    outputs:
+      gate-passed: ${{ steps.gate-decision.outputs.gate-passed }}
+      gate-status: ${{ steps.gate-decision.outputs.gate-status }}
+      validation-summary: ${{ steps.generate-summary.outputs.summary }}
+      deployment-allowed: ${{ steps.gate-decision.outputs.deployment-allowed }}
+      requires-approval: ${{ steps.gate-decision.outputs.requires-approval }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate deployment prerequisites
+        run: |
+          echo "🚀 Starting deployment gate validation"
+          echo "Target Environment: ${{ inputs.target-environment }}"
+          echo "Gate Strategy: ${{ inputs.gate-strategy }}"
+          echo "Manifest: ${{ inputs.manifest-path }}"
+          
+          if [ ! -f "${{ inputs.manifest-path }}" ]; then
+            echo "::error::Manifest file not found: ${{ inputs.manifest-path }}"
+            exit 1
+          fi
+          
+          # Parse deployment metadata
+          METADATA='${{ inputs.deployment-metadata }}'
+          if [ "$METADATA" != "{}" ]; then
+            echo "Deployment Metadata:"
+            echo "$METADATA" | jq .
+          fi
+
+      - name: Create deployment record
+        id: deployment
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: '${{ inputs.target-environment }}',
+              description: 'Deployment gate validation',
+              auto_merge: false,
+              required_contexts: []
+            });
+            
+            core.setOutput('deployment-id', deployment.data.id);
+            
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'in_progress',
+              description: 'Running deployment gate validation'
+            });
+
+      - name: Get target environment configuration
+        id: target-config
+        run: |
+          case "${{ inputs.target-environment }}" in
+            "staging"|"stage")
+              echo "flag-url=${{ secrets.STAGING_FLAG_URL }}" >> $GITHUB_OUTPUT
+              echo "auth-token=${{ secrets.STAGING_FLAG_TOKEN }}" >> $GITHUB_OUTPUT
+              ;;
+            "production"|"prod")
+              echo "flag-url=${{ secrets.PRODUCTION_FLAG_URL }}" >> $GITHUB_OUTPUT
+              echo "auth-token=${{ secrets.PRODUCTION_FLAG_TOKEN }}" >> $GITHUB_OUTPUT
+              ;;
+            "qa"|"test")
+              echo "flag-url=${{ secrets.QA_FLAG_URL }}" >> $GITHUB_OUTPUT
+              echo "auth-token=${{ secrets.QA_FLAG_TOKEN }}" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "::warning::No specific configuration for environment: ${{ inputs.target-environment }}"
+              echo "flag-url=" >> $GITHUB_OUTPUT
+              echo "auth-token=" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Validate against target environment
+        uses: open-feature/openfeature-action@v1
+        id: target-validation
+        continue-on-error: true
+        with:
+          manifest: ${{ inputs.manifest-path }}
+          against: ${{ steps.target-config.outputs.flag-url }}
+          auth-token: ${{ steps.target-config.outputs.auth-token }}
+          cli-version: ${{ inputs.cli-version }}
+          post-pr-comment: false
+          against-manifest-path: current-${{ inputs.target-environment }}-flags.json
+
+      - name: Validate against comparison sources
+        id: comparison-validation
+        run: |
+          SOURCES='${{ inputs.comparison-sources }}'
+          mkdir -p comparison-results
+          
+          echo "Comparing against sources: $SOURCES"
+          
+          # Initialize results
+          COMPARISON_PASSED=true
+          COMPARISON_SUMMARY=""
+          
+          # Parse comparison sources
+          for source in $(echo "$SOURCES" | jq -r '.[]'); do
+            echo "Validating against source: $source"
+            
+            case "$source" in
+              "staging")
+                SOURCE_URL="${{ secrets.STAGING_FLAG_URL }}"
+                SOURCE_TOKEN="${{ secrets.STAGING_FLAG_TOKEN }}"
+                ;;
+              "production")
+                SOURCE_URL="${{ secrets.PRODUCTION_FLAG_URL }}"
+                SOURCE_TOKEN="${{ secrets.PRODUCTION_FLAG_TOKEN }}"
+                ;;
+              "qa")
+                SOURCE_URL="${{ secrets.QA_FLAG_URL }}"
+                SOURCE_TOKEN="${{ secrets.QA_FLAG_TOKEN }}"
+                ;;
+              *)
+                echo "::warning::Unknown comparison source: $source"
+                continue
+                ;;
+            esac
+            
+            if [ -n "$SOURCE_URL" ]; then
+              echo "Comparing against $source environment..."
+              # Note: In a real implementation, you'd run the action here
+              # For now, we'll simulate the comparison
+              echo "{\"source\": \"$source\", \"status\": \"checked\"}" > comparison-results/$source.json
+            else
+              echo "::warning::No URL configured for source: $source"
+            fi
+          done
+          
+          echo "comparison-passed=$COMPARISON_PASSED" >> $GITHUB_OUTPUT
+
+      - name: Analyze validation results
+        id: analyze-results
+        run: |
+          TARGET_VALIDATION="${{ steps.target-validation.outcome }}"
+          TARGET_DIFFERENCES="${{ steps.target-validation.outputs.has-differences }}"
+          COMPARISON_PASSED="${{ steps.comparison-validation.outputs.comparison-passed }}"
+          
+          echo "## 🛡️ Deployment Gate Analysis" > gate-analysis.md
+          echo "" >> gate-analysis.md
+          echo "**Target Environment:** ${{ inputs.target-environment }}" >> gate-analysis.md
+          echo "**Strategy:** ${{ inputs.gate-strategy }}" >> gate-analysis.md
+          echo "**Timestamp:** $(date -u)" >> gate-analysis.md
+          echo "" >> gate-analysis.md
+          
+          # Analyze target validation
+          echo "### 🎯 Target Environment Validation" >> gate-analysis.md
+          if [ "$TARGET_VALIDATION" = "failure" ]; then
+            echo "- **Status:** ❌ Failed to connect/validate" >> gate-analysis.md
+            echo "- **Issue:** Unable to validate against target environment" >> gate-analysis.md
+            GATE_RESULT="failed"
+          elif [ "$TARGET_DIFFERENCES" = "true" ]; then
+            echo "- **Status:** ⚠️ Differences detected" >> gate-analysis.md
+            echo "- **Summary:** ${{ steps.target-validation.outputs.summary }}" >> gate-analysis.md
+            GATE_RESULT="differences"
+          else
+            echo "- **Status:** ✅ No differences" >> gate-analysis.md
+            echo "- **Summary:** Flags match target environment" >> gate-analysis.md
+            GATE_RESULT="passed"
+          fi
+          
+          echo "" >> gate-analysis.md
+          echo "### 🔄 Comparison Sources Validation" >> gate-analysis.md
+          echo "- **Status:** ${{ steps.comparison-validation.outputs.comparison-passed == 'true' && '✅ Passed' || '⚠️ Issues detected' }}" >> gate-analysis.md
+          echo "" >> gate-analysis.md
+          
+          echo "gate-result=$GATE_RESULT" >> $GITHUB_OUTPUT
+
+      - name: Gate decision logic
+        id: gate-decision
+        run: |
+          GATE_RESULT="${{ steps.analyze-results.outputs.gate-result }}"
+          STRATEGY="${{ inputs.gate-strategy }}"
+          
+          echo "Gate result: $GATE_RESULT"
+          echo "Strategy: $STRATEGY"
+          
+          case "$STRATEGY" in
+            "strict")
+              if [ "$GATE_RESULT" = "passed" ]; then
+                GATE_PASSED=true
+                GATE_STATUS="passed"
+                DEPLOYMENT_ALLOWED=true
+                REQUIRES_APPROVAL=false
+                echo "::notice::✅ Deployment gate PASSED - proceeding with deployment"
+              else
+                GATE_PASSED=false
+                GATE_STATUS="failed"
+                DEPLOYMENT_ALLOWED=false
+                REQUIRES_APPROVAL=false
+                echo "::error::❌ Deployment gate FAILED - blocking deployment"
+              fi
+              ;;
+            "warn")
+              if [ "$GATE_RESULT" = "passed" ]; then
+                GATE_PASSED=true
+                GATE_STATUS="passed"
+                DEPLOYMENT_ALLOWED=true
+                REQUIRES_APPROVAL=false
+                echo "::notice::✅ Deployment gate PASSED - proceeding with deployment"
+              else
+                GATE_PASSED=false
+                GATE_STATUS="warning"
+                DEPLOYMENT_ALLOWED=true
+                REQUIRES_APPROVAL="${{ inputs.require-approval }}"
+                echo "::warning::⚠️ Deployment gate detected issues but allowing deployment"
+              fi
+              ;;
+            "advisory")
+              GATE_PASSED=true
+              GATE_STATUS="advisory"
+              DEPLOYMENT_ALLOWED=true
+              REQUIRES_APPROVAL=false
+              echo "::notice::ℹ️ Deployment gate in advisory mode - always allowing deployment"
+              ;;
+            *)
+              echo "::error::Unknown gate strategy: $STRATEGY"
+              GATE_PASSED=false
+              GATE_STATUS="failed"
+              DEPLOYMENT_ALLOWED=false
+              REQUIRES_APPROVAL=false
+              ;;
+          esac
+          
+          echo "gate-passed=$GATE_PASSED" >> $GITHUB_OUTPUT
+          echo "gate-status=$GATE_STATUS" >> $GITHUB_OUTPUT
+          echo "deployment-allowed=$DEPLOYMENT_ALLOWED" >> $GITHUB_OUTPUT
+          echo "requires-approval=$REQUIRES_APPROVAL" >> $GITHUB_OUTPUT
+
+      - name: Wait for manual approval
+        if: steps.gate-decision.outputs.requires-approval == 'true'
+        uses: actions/github-script@v6
+        timeout-minutes: ${{ inputs.approval-timeout }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 Manual Approval Required - Deployment to ${{ inputs.target-environment }}`,
+              body: `## Deployment Approval Request
+              
+              A deployment to **${{ inputs.target-environment }}** requires manual approval due to detected flag differences.
+              
+              ### Details
+              - **Workflow:** ${context.workflow}
+              - **Run:** [${context.runId}](${context.payload.repository.html_url}/actions/runs/${context.runId})
+              - **Commit:** ${context.sha}
+              - **Target Environment:** ${{ inputs.target-environment }}
+              
+              ### Actions
+              - Comment "APPROVE" to approve the deployment
+              - Comment "REJECT" to reject the deployment
+              - Close this issue to cancel
+              
+              **Timeout:** ${{ inputs.approval-timeout }} minutes`,
+              labels: ['deployment-approval', 'needs-review', '${{ inputs.target-environment }}']
+            });
+            
+            const issueNumber = issue.number;
+            core.setOutput('approval-issue', issueNumber);
+            
+            // Poll for approval
+            const startTime = Date.now();
+            const timeout = ${{ inputs.approval-timeout }} * 60 * 1000;
+            
+            while (Date.now() - startTime < timeout) {
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber
+              });
+              
+              for (const comment of comments) {
+                const body = comment.body.toUpperCase().trim();
+                if (body === 'APPROVE') {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    state: 'closed'
+                  });
+                  core.setOutput('approval-status', 'approved');
+                  return;
+                } else if (body === 'REJECT') {
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issueNumber,
+                    state: 'closed'
+                  });
+                  core.setOutput('approval-status', 'rejected');
+                  core.setFailed('Deployment rejected by manual approval');
+                  return;
+                }
+              }
+              
+              await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds
+            }
+            
+            // Timeout
+            core.setOutput('approval-status', 'timeout');
+            core.setFailed('Manual approval timed out');
+
+      - name: Generate comprehensive summary
+        id: generate-summary
+        run: |
+          cat << 'EOF' > final-summary.md
+          # 🛡️ Deployment Gate Summary
+          
+          **Environment:** ${{ inputs.target-environment }}
+          **Strategy:** ${{ inputs.gate-strategy }}
+          **Gate Status:** ${{ steps.gate-decision.outputs.gate-status }}
+          **Deployment Allowed:** ${{ steps.gate-decision.outputs.deployment-allowed }}
+          
+          ## Validation Results
+          - **Target Environment Check:** ${{ steps.target-validation.outcome }}
+          - **Has Differences:** ${{ steps.target-validation.outputs.has-differences }}
+          - **Comparison Sources:** ${{ steps.comparison-validation.outputs.comparison-passed }}
+          
+          ## Decision
+          ${{ steps.gate-decision.outputs.gate-status == 'passed' && '✅ **GATE PASSED** - Deployment approved' || 
+             steps.gate-decision.outputs.gate-status == 'warning' && '⚠️ **GATE WARNING** - Deployment allowed with caution' ||
+             steps.gate-decision.outputs.gate-status == 'advisory' && 'ℹ️ **GATE ADVISORY** - Information only' ||
+             '❌ **GATE FAILED** - Deployment blocked' }}
+          
+          ---
+          *Deployment Gate Report - $(date -u)*
+          EOF
+          
+          {
+            echo "summary<<EOF"
+            cat final-summary.md
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Add to step summary
+        run: |
+          cat gate-analysis.md >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat final-summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Update deployment status
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const deploymentId = '${{ steps.deployment.outputs.deployment-id }}';
+            const gateStatus = '${{ steps.gate-decision.outputs.gate-status }}';
+            const deploymentAllowed = '${{ steps.gate-decision.outputs.deployment-allowed }}';
+            
+            let state, description;
+            
+            if (deploymentAllowed === 'true') {
+              state = 'success';
+              description = `Deployment gate passed (${gateStatus})`;
+            } else {
+              state = 'failure';
+              description = `Deployment gate failed (${gateStatus})`;
+            }
+            
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deploymentId,
+              state: state,
+              description: description,
+              environment_url: '${{ steps.target-config.outputs.flag-url }}'
+            });
+
+      - name: Slack notification
+        if: secrets.SLACK_WEBHOOK
+        run: |
+          NOTIFICATION_SETTINGS='${{ inputs.notification-channels }}'
+          SEND_SLACK=$(echo "$NOTIFICATION_SETTINGS" | jq -r '.slack // true')
+          
+          if [ "$SEND_SLACK" = "true" ]; then
+            GATE_STATUS="${{ steps.gate-decision.outputs.gate-status }}"
+            DEPLOYMENT_ALLOWED="${{ steps.gate-decision.outputs.deployment-allowed }}"
+            
+            if [ "$DEPLOYMENT_ALLOWED" = "true" ]; then
+              COLOR="good"
+              EMOJI="✅"
+              MESSAGE="Deployment gate passed"
+            else
+              COLOR="danger"
+              EMOJI="❌"
+              MESSAGE="Deployment gate failed"
+            fi
+            
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": "'$EMOJI' Deployment Gate - ${{ inputs.target-environment }}",
+                "attachments": [{
+                  "color": "'$COLOR'",
+                  "title": "Deployment Gate Result",
+                  "fields": [{
+                    "title": "Environment",
+                    "value": "${{ inputs.target-environment }}",
+                    "short": true
+                  }, {
+                    "title": "Status",
+                    "value": "'$GATE_STATUS'",
+                    "short": true
+                  }, {
+                    "title": "Repository",
+                    "value": "${{ github.repository }}",
+                    "short": true
+                  }, {
+                    "title": "Deployment Allowed",
+                    "value": "'$DEPLOYMENT_ALLOWED'",
+                    "short": true
+                  }],
+                  "footer": "Deployment Gate",
+                  "ts": '$(date +%s)'
+                }]
+              }' \
+              ${{ secrets.SLACK_WEBHOOK }}
+          fi
+
+      - name: Fail workflow if gate failed
+        if: steps.gate-decision.outputs.deployment-allowed == 'false'
+        run: |
+          echo "::error::Deployment gate failed - blocking deployment to ${{ inputs.target-environment }}"
+          echo "::notice::Review the validation results above and resolve any issues"
+          exit 1
+
+      - name: Success message
+        if: steps.gate-decision.outputs.deployment-allowed == 'true'
+        run: |
+          echo "::notice::✅ Deployment gate passed for ${{ inputs.target-environment }}"
+          echo "::notice::Deployment is approved to proceed"

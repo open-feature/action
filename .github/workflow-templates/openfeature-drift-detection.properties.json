@@ -1,0 +1,15 @@
+{
+  "name": "OpenFeature Drift Detection",
+  "description": "Scheduled detection of configuration drift between local flag manifests and remote environments. Creates issues and sends notifications when drift is detected.",
+  "iconName": "alert",
+  "categories": [
+    "Monitoring",
+    "Continuous Integration",
+    "Operations"
+  ],
+  "filePatterns": [
+    "flags.json",
+    "feature-flags.*",
+    "openfeature.*"
+  ]
+}

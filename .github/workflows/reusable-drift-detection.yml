@@ -1,0 +1,366 @@
+name: 'Reusable Drift Detection'
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        description: 'Path to the manifest file to check for drift'
+        required: false
+        type: string
+        default: 'flags.json'
+      environments:
+        description: 'JSON array of environments to check (e.g., ["staging", "production"])'
+        required: false
+        type: string
+        default: '["production"]'
+      schedule-description:
+        description: 'Description of the schedule (for notifications)'
+        required: false
+        type: string
+        default: 'Scheduled drift detection'
+      cli-version:
+        description: 'OpenFeature CLI version to use'
+        required: false
+        type: string
+        default: 'latest'
+      fail-on-drift:
+        description: 'Fail the workflow if drift is detected'
+        required: false
+        type: boolean
+        default: false
+      create-issue-on-drift:
+        description: 'Create GitHub issue when drift is detected'
+        required: false
+        type: boolean
+        default: true
+      issue-labels:
+        description: 'Comma-separated labels for drift issues'
+        required: false
+        type: string
+        default: 'drift-detected,feature-flags,needs-review'
+      notification-channels:
+        description: 'JSON object with notification settings'
+        required: false
+        type: string
+        default: '{"slack": true, "email": false}'
+    secrets:
+      # Environment-specific secrets (format: {ENV}_FLAG_URL and {ENV}_FLAG_TOKEN)
+      STAGING_FLAG_URL:
+        required: false
+      STAGING_FLAG_TOKEN:
+        required: false
+      PRODUCTION_FLAG_URL:
+        required: false
+      PRODUCTION_FLAG_TOKEN:
+        required: false
+      DEV_FLAG_URL:
+        required: false
+      DEV_FLAG_TOKEN:
+        required: false
+      # Notification secrets
+      SLACK_WEBHOOK:
+        required: false
+      TEAMS_WEBHOOK:
+        required: false
+      DISCORD_WEBHOOK:
+        required: false
+      GITHUB_TOKEN:
+        required: false
+    outputs:
+      drift-detected:
+        description: 'Whether drift was detected in any environment'
+        value: ${{ jobs.detect-drift.outputs.drift-detected }}
+      affected-environments:
+        description: 'List of environments with detected drift'
+        value: ${{ jobs.detect-drift.outputs.affected-environments }}
+      drift-summary:
+        description: 'Summary of drift detection results'
+        value: ${{ jobs.detect-drift.outputs.drift-summary }}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  detect-drift:
+    runs-on: ubuntu-latest
+    name: Detect Configuration Drift
+    outputs:
+      drift-detected: ${{ steps.analyze-results.outputs.drift-detected }}
+      affected-environments: ${{ steps.analyze-results.outputs.affected-environments }}
+      drift-summary: ${{ steps.generate-summary.outputs.summary }}
+
+    strategy:
+      matrix:
+        environment: ${{ fromJson(inputs.environments) }}
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate manifest file exists
+        run: |
+          if [ ! -f "${{ inputs.manifest-path }}" ]; then
+            echo "::error::Manifest file not found: ${{ inputs.manifest-path }}"
+            exit 1
+          fi
+
+      - name: Get environment secrets
+        id: get-secrets
+        run: |
+          ENV_UPPER=$(echo "${{ matrix.environment }}" | tr '[:lower:]' '[:upper:]')
+          
+          # Try to get URL secret
+          URL_SECRET_NAME="${ENV_UPPER}_FLAG_URL"
+          TOKEN_SECRET_NAME="${ENV_UPPER}_FLAG_TOKEN"
+          
+          echo "url-secret-name=$URL_SECRET_NAME" >> $GITHUB_OUTPUT
+          echo "token-secret-name=$TOKEN_SECRET_NAME" >> $GITHUB_OUTPUT
+          echo "environment-upper=$ENV_UPPER" >> $GITHUB_OUTPUT
+
+      - name: Check drift for ${{ matrix.environment }}
+        uses: open-feature/openfeature-action@v1
+        id: drift-check
+        continue-on-error: true
+        with:
+          manifest: ${{ inputs.manifest-path }}
+          against: ${{ 
+            (matrix.environment == 'staging' && secrets.STAGING_FLAG_URL) ||
+            (matrix.environment == 'production' && secrets.PRODUCTION_FLAG_URL) ||
+            (matrix.environment == 'dev' && secrets.DEV_FLAG_URL) ||
+            format('https://api.{0}.example.com/flags', matrix.environment)
+          }}
+          auth-token: ${{ 
+            (matrix.environment == 'staging' && secrets.STAGING_FLAG_TOKEN) ||
+            (matrix.environment == 'production' && secrets.PRODUCTION_FLAG_TOKEN) ||
+            (matrix.environment == 'dev' && secrets.DEV_FLAG_TOKEN) ||
+            ''
+          }}
+          cli-version: ${{ inputs.cli-version }}
+          post-pr-comment: false
+          against-manifest-path: ${{ matrix.environment }}-flags.json
+
+      - name: Store drift results
+        run: |
+          mkdir -p drift-results
+          
+          cat << EOF > drift-results/${{ matrix.environment }}.json
+          {
+            "environment": "${{ matrix.environment }}",
+            "has_differences": "${{ steps.drift-check.outputs.has-differences }}",
+            "summary": "${{ steps.drift-check.outputs.summary }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "workflow_run": "${{ github.run_id }}",
+            "check_status": "${{ steps.drift-check.outcome }}"
+          }
+          EOF
+
+      - name: Upload drift results
+        uses: actions/upload-artifact@v3
+        with:
+          name: drift-results-${{ matrix.environment }}
+          path: drift-results/${{ matrix.environment }}.json
+          retention-days: 30
+
+  analyze-results:
+    needs: detect-drift
+    runs-on: ubuntu-latest
+    name: Analyze Drift Results
+    outputs:
+      drift-detected: ${{ steps.analyze.outputs.drift-detected }}
+      affected-environments: ${{ steps.analyze.outputs.affected-environments }}
+
+    steps:
+      - name: Download all drift results
+        uses: actions/download-artifact@v3
+        with:
+          path: all-drift-results
+
+      - name: Analyze drift results
+        id: analyze
+        run: |
+          DRIFT_DETECTED=false
+          AFFECTED_ENVS=""
+          
+          echo "## 🔍 Drift Detection Results" > analysis.md
+          echo "" >> analysis.md
+          echo "**Scan Time:** $(date -u)" >> analysis.md
+          echo "**Trigger:** ${{ inputs.schedule-description }}" >> analysis.md
+          echo "" >> analysis.md
+          
+          for env_dir in all-drift-results/drift-results-*; do
+            if [ -d "$env_dir" ]; then
+              ENV_FILE="$env_dir"/*.json
+              if [ -f "$ENV_FILE" ]; then
+                ENV_NAME=$(jq -r '.environment' "$ENV_FILE")
+                HAS_DIFF=$(jq -r '.has_differences' "$ENV_FILE")
+                SUMMARY=$(jq -r '.summary' "$ENV_FILE")
+                STATUS=$(jq -r '.check_status' "$ENV_FILE")
+                
+                echo "### 🌍 Environment: $ENV_NAME" >> analysis.md
+                
+                if [ "$HAS_DIFF" = "true" ]; then
+                  DRIFT_DETECTED=true
+                  if [ -z "$AFFECTED_ENVS" ]; then
+                    AFFECTED_ENVS="$ENV_NAME"
+                  else
+                    AFFECTED_ENVS="$AFFECTED_ENVS,$ENV_NAME"
+                  fi
+                  echo "- **Status:** ⚠️ Drift Detected" >> analysis.md
+                  echo "- **Summary:** $SUMMARY" >> analysis.md
+                elif [ "$STATUS" = "failure" ]; then
+                  echo "- **Status:** ❌ Check Failed" >> analysis.md
+                  echo "- **Error:** Unable to compare (check logs for details)" >> analysis.md
+                else
+                  echo "- **Status:** ✅ No Drift" >> analysis.md
+                  echo "- **Summary:** Flags are in sync" >> analysis.md
+                fi
+                echo "" >> analysis.md
+              fi
+            fi
+          done
+          
+          echo "drift-detected=$DRIFT_DETECTED" >> $GITHUB_OUTPUT
+          echo "affected-environments=$AFFECTED_ENVS" >> $GITHUB_OUTPUT
+          
+          echo "::notice::Drift detected: $DRIFT_DETECTED"
+          if [ "$DRIFT_DETECTED" = "true" ]; then
+            echo "::warning::Configuration drift detected in: $AFFECTED_ENVS"
+          fi
+
+      - name: Generate summary
+        id: generate-summary
+        run: |
+          {
+            echo "summary<<EOF"
+            cat analysis.md
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Add to step summary
+        run: |
+          cat analysis.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Create GitHub issue on drift
+        if: inputs.create-issue-on-drift && steps.analyze.outputs.drift-detected == 'true'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const analysis = fs.readFileSync('analysis.md', 'utf8');
+            
+            const title = `🚨 Configuration Drift Detected - ${new Date().toISOString().split('T')[0]}`;
+            const body = `${analysis}
+            
+            ## 🔧 Action Required
+            
+            Configuration drift has been detected between your local manifest and remote environments.
+            
+            **Affected Environments:** ${{ steps.analyze.outputs.affected-environments }}
+            
+            ### Next Steps:
+            1. Review the differences shown above
+            2. Determine if the drift is intentional or requires correction
+            3. Update either your local manifest or remote configuration as needed
+            4. Close this issue once resolved
+            
+            ---
+            *Automated drift detection from workflow run [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: '${{ inputs.issue-labels }}'.split(',').map(l => l.trim())
+            });
+
+      - name: Slack notification
+        if: secrets.SLACK_WEBHOOK && steps.analyze.outputs.drift-detected == 'true'
+        run: |
+          NOTIFICATION_SETTINGS='${{ inputs.notification-channels }}'
+          SEND_SLACK=$(echo "$NOTIFICATION_SETTINGS" | jq -r '.slack // true')
+          
+          if [ "$SEND_SLACK" = "true" ]; then
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": "🚨 Configuration Drift Detected",
+                "attachments": [{
+                  "color": "danger",
+                  "title": "Feature Flag Configuration Drift",
+                  "fields": [{
+                    "title": "Repository",
+                    "value": "${{ github.repository }}",
+                    "short": true
+                  }, {
+                    "title": "Affected Environments", 
+                    "value": "${{ steps.analyze.outputs.affected-environments }}",
+                    "short": true
+                  }, {
+                    "title": "Detection Time",
+                    "value": "'$(date -u)'",
+                    "short": true
+                  }, {
+                    "title": "Workflow Run",
+                    "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>",
+                    "short": true
+                  }],
+                  "footer": "${{ inputs.schedule-description }}"
+                }]
+              }' \
+              ${{ secrets.SLACK_WEBHOOK }}
+          fi
+
+      - name: Teams notification
+        if: secrets.TEAMS_WEBHOOK && steps.analyze.outputs.drift-detected == 'true'
+        run: |
+          NOTIFICATION_SETTINGS='${{ inputs.notification-channels }}'
+          SEND_TEAMS=$(echo "$NOTIFICATION_SETTINGS" | jq -r '.teams // false')
+          
+          if [ "$SEND_TEAMS" = "true" ]; then
+            curl -X POST -H 'Content-Type: application/json' \
+              --data '{
+                "@type": "MessageCard",
+                "@context": "http://schema.org/extensions",
+                "themeColor": "FF0000",
+                "summary": "Configuration Drift Detected",
+                "sections": [{
+                  "activityTitle": "🚨 Feature Flag Configuration Drift Detected",
+                  "facts": [{
+                    "name": "Repository",
+                    "value": "${{ github.repository }}"
+                  }, {
+                    "name": "Affected Environments",
+                    "value": "${{ steps.analyze.outputs.affected-environments }}"
+                  }, {
+                    "name": "Detection Time",
+                    "value": "'$(date -u)'"
+                  }],
+                  "markdown": true
+                }],
+                "potentialAction": [{
+                  "@type": "OpenUri",
+                  "name": "View Workflow Run",
+                  "targets": [{
+                    "os": "default",
+                    "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }]
+                }]
+              }' \
+              ${{ secrets.TEAMS_WEBHOOK }}
+          fi
+
+      - name: Fail workflow if drift detected and strict mode
+        if: inputs.fail-on-drift && steps.analyze.outputs.drift-detected == 'true'
+        run: |
+          echo "::error::Configuration drift detected in: ${{ steps.analyze.outputs.affected-environments }}"
+          echo "::notice::Review the drift analysis above and take corrective action"
+          exit 1
+
+      - name: Success message
+        if: steps.analyze.outputs.drift-detected == 'false'
+        run: |
+          echo "::notice::✅ No configuration drift detected across all environments"
+          echo "::notice::All flag configurations are in sync"

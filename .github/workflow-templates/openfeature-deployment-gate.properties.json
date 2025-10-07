@@ -1,0 +1,16 @@
+{
+  "name": "OpenFeature Deployment Gate",
+  "description": "Pre-deployment validation of feature flags with approval workflows. Blocks deployments if flag configurations don't match target environments.",
+  "iconName": "shield",
+  "categories": [
+    "Continuous Deployment",
+    "Security",
+    "Operations"
+  ],
+  "filePatterns": [
+    "flags.json",
+    "feature-flags.*",
+    "openfeature.*",
+    "deploy*"
+  ]
+}

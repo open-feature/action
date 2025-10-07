@@ -1,0 +1,31 @@
+name: OpenFeature PR Validation
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths: 
+      - 'flags.json'
+      - 'feature-flags.json'
+      - '**/*flags*.json'
+      - '**/*flags*.yml'
+      - '**/*flags*.yaml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-flags:
+    name: Validate Feature Flags
+    uses: open-feature/openfeature-action/.github/workflows/reusable-pr-validation.yml@v1
+    with:
+      manifest-path: 'flags.json'  # Update to match your manifest file path
+      include-git-comparison: true
+      post-comments: true
+      strict-mode: false
+      cli-version: 'latest'
+      workflow-name: 'Flag PR Validation'
+    secrets:
+      # Add your flag source authentication token if comparing against remote source
+      # auth-token: ${{ secrets.FLAG_SOURCE_TOKEN }}
+      # slack-webhook: ${{ secrets.SLACK_WEBHOOK }}  # Optional Slack notifications

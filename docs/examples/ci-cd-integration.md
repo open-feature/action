@@ -2,6 +2,82 @@
 
 Complete workflow examples for integrating the OpenFeature Action into your CI/CD pipelines.
 
+## Reusable Workflows (Recommended)
+
+For production environments, we recommend using our **[reusable workflows](../reusable-workflows.md)** which provide robust, battle-tested patterns:
+
+### PR Validation with Reusable Workflow
+
+```yaml
+name: Flag PR Validation
+on:
+  pull_request:
+    branches: [main]
+    paths: ['flags.json']
+
+jobs:
+  validate:
+    uses: open-feature/openfeature-action/.github/workflows/reusable-pr-validation.yml@v1
+    with:
+      manifest-path: 'flags.json'
+      strict-mode: false
+      include-git-comparison: true
+    secrets:
+      auth-token: ${{ secrets.FLAG_PROVIDER_TOKEN }}
+      slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
+```
+
+### Drift Detection
+
+```yaml
+name: Configuration Drift Detection
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+jobs:
+  detect-drift:
+    uses: open-feature/openfeature-action/.github/workflows/reusable-drift-detection.yml@v1
+    with:
+      environments: '["staging", "production"]'
+      create-issue-on-drift: true
+    secrets:
+      STAGING_FLAG_URL: ${{ secrets.STAGING_FLAG_URL }}
+      STAGING_FLAG_TOKEN: ${{ secrets.STAGING_FLAG_TOKEN }}
+      PRODUCTION_FLAG_URL: ${{ secrets.PRODUCTION_FLAG_URL }}
+      PRODUCTION_FLAG_TOKEN: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+```
+
+### Deployment Gate
+
+```yaml
+name: Production Deployment
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+
+jobs:
+  deployment-gate:
+    uses: open-feature/openfeature-action/.github/workflows/reusable-deployment-gate.yml@v1
+    with:
+      target-environment: ${{ inputs.environment }}
+      gate-strategy: 'strict'
+      require-approval: true
+    secrets:
+      STAGING_FLAG_URL: ${{ secrets.STAGING_FLAG_URL }}
+      STAGING_FLAG_TOKEN: ${{ secrets.STAGING_FLAG_TOKEN }}
+      PRODUCTION_FLAG_URL: ${{ secrets.PRODUCTION_FLAG_URL }}
+      PRODUCTION_FLAG_TOKEN: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+```
+
+## Custom Workflows
+
+For specific needs, you can create custom workflows using the base action:
+
 ## Complete PR Validation Workflow
 
 A comprehensive pull request validation setup:

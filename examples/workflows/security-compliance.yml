@@ -1,0 +1,420 @@
+# Security & Compliance Workflow Example
+# This workflow demonstrates advanced security and compliance features:
+# - SOX compliance auditing
+# - GDPR privacy checks
+# - Required approvals for production changes
+# - Security incident response
+# - Compliance reporting
+
+name: Security & Compliance Flag Management
+
+on:
+  pull_request:
+    branches: [main, release/*]
+    paths: ['flags.json', 'config/flags/**']
+  push:
+    branches: [main]
+    paths: ['flags.json']
+  schedule:
+    - cron: '0 1 * * *'  # Daily compliance check at 1 AM
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  security-events: write
+
+env:
+  COMPLIANCE_FRAMEWORK: 'SOX'  # SOX, GDPR, HIPAA, etc.
+  SECURITY_TEAM: '@security-team'
+
+jobs:
+  # Security scanning and validation
+  security-scan:
+    name: Security & Privacy Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan for sensitive data in flags
+        run: |
+          echo "🔍 Scanning flag configuration for sensitive data..."
+          
+          # Check for potential secrets or PII in flag names and values
+          SECURITY_ISSUES=""
+          
+          # Scan for common secret patterns
+          if grep -iE "(password|secret|key|token|api|private|auth)" flags.json; then
+            SECURITY_ISSUES="$SECURITY_ISSUES\n- Potential secrets detected in flag names/values"
+            echo "::warning::Potential secrets detected in flag configuration"
+          fi
+          
+          # Scan for PII patterns
+          if grep -E "[\w\.-]+@[\w\.-]+\.\w+|[0-9]{3}-[0-9]{2}-[0-9]{4}|\b[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}\b" flags.json; then
+            SECURITY_ISSUES="$SECURITY_ISSUES\n- Potential PII (email/SSN/credit card) detected"
+            echo "::error::Potential PII detected in flag configuration"
+          fi
+          
+          # Scan for internal URLs or IPs
+          if grep -E "https?://[^/]*\.(internal|local|corp|company)\.|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\." flags.json; then
+            SECURITY_ISSUES="$SECURITY_ISSUES\n- Internal URLs or IP addresses detected"
+            echo "::warning::Internal network references detected"
+          fi
+          
+          # Save security scan results
+          if [ -n "$SECURITY_ISSUES" ]; then
+            echo "SECURITY_ISSUES_FOUND=true" >> $GITHUB_ENV
+            echo "SECURITY_ISSUES<<EOF" >> $GITHUB_ENV
+            echo -e "$SECURITY_ISSUES" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          else
+            echo "SECURITY_ISSUES_FOUND=false" >> $GITHUB_ENV
+            echo "::notice::No security issues detected in flag configuration"
+          fi
+
+      - name: GDPR compliance check
+        if: env.COMPLIANCE_FRAMEWORK == 'GDPR' || contains(env.COMPLIANCE_FRAMEWORK, 'GDPR')
+        run: |
+          echo "🛡️ Performing GDPR compliance check..."
+          
+          # Check for targeting rules that might process personal data
+          if jq -e '.flags[] | select(.targeting and (.targeting | length > 0))' flags.json > /dev/null; then
+            echo "::warning::Targeting rules detected - ensure GDPR compliance for personal data processing"
+            
+            # Extract targeting rules for review
+            jq '.flags | to_entries[] | select(.value.targeting and (.value.targeting | length > 0)) | {flag: .key, targeting: .value.targeting}' flags.json > targeting-rules.json
+            
+            echo "GDPR_REVIEW_REQUIRED=true" >> $GITHUB_ENV
+          else
+            echo "::notice::No targeting rules found - minimal GDPR impact"
+            echo "GDPR_REVIEW_REQUIRED=false" >> $GITHUB_ENV
+          fi
+
+      - name: Generate security report
+        run: |
+          cat << EOF > security-report.md
+          # 🔒 Security & Compliance Report
+          
+          **Date:** $(date -u)
+          **Repository:** ${{ github.repository }}
+          **Compliance Framework:** ${{ env.COMPLIANCE_FRAMEWORK }}
+          **Scan Type:** ${{ github.event_name }}
+          
+          ## Security Scan Results
+          
+          EOF
+          
+          if [ "$SECURITY_ISSUES_FOUND" = "true" ]; then
+            echo "### ⚠️ Security Issues Detected" >> security-report.md
+            echo "$SECURITY_ISSUES" >> security-report.md
+          else
+            echo "### ✅ No Security Issues Detected" >> security-report.md
+            echo "Flag configuration passed all security checks." >> security-report.md
+          fi
+          
+          if [ "$GDPR_REVIEW_REQUIRED" = "true" ]; then
+            echo "" >> security-report.md
+            echo "### 📋 GDPR Compliance Review Required" >> security-report.md
+            echo "Targeting rules detected that may process personal data." >> security-report.md
+            echo "Please ensure:" >> security-report.md
+            echo "- User consent is obtained" >> security-report.md
+            echo "- Data processing is documented" >> security-report.md
+            echo "- Privacy impact assessment is completed" >> security-report.md
+          fi
+
+      - name: Upload security artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-scan-results
+          path: |
+            security-report.md
+            targeting-rules.json
+          retention-days: 90  # Compliance retention
+
+  # SOX compliance workflow for production changes
+  sox-compliance:
+    name: SOX Compliance Validation
+    if: github.event_name == 'pull_request' && contains(github.base_ref, 'main')
+    runs-on: ubuntu-latest
+    needs: security-scan
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SOX audit trail validation
+        run: |
+          echo "📋 Performing SOX compliance validation..."
+          
+          # Ensure PR has proper approval
+          if [ "${{ github.event.pull_request.merged_by }}" = "null" ]; then
+            echo "::error::SOX violation: Production changes must be reviewed and approved"
+            echo "COMPLIANCE_VIOLATION=true" >> $GITHUB_ENV
+          fi
+          
+          # Check for emergency changes (bypassing normal process)
+          if [[ "${{ github.event.pull_request.title }}" =~ [Ee]mergency|[Hh]otfix|[Uu]rgent ]]; then
+            echo "::warning::Emergency change detected - additional documentation required"
+            echo "EMERGENCY_CHANGE=true" >> $GITHUB_ENV
+          fi
+          
+          # Validate change documentation
+          if ! grep -q "Business Justification" "${{ github.event.pull_request.body }}"; then
+            echo "::warning::Missing business justification in PR description"
+            echo "MISSING_JUSTIFICATION=true" >> $GITHUB_ENV
+          fi
+
+      - name: Generate SOX audit log
+        run: |
+          cat << EOF > sox-audit-log.json
+          {
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "event_type": "flag_change_review",
+            "compliance_framework": "SOX",
+            "repository": "${{ github.repository }}",
+            "pr_number": "${{ github.event.pull_request.number }}",
+            "pr_title": "${{ github.event.pull_request.title }}",
+            "author": "${{ github.event.pull_request.user.login }}",
+            "reviewer": "${{ github.event.pull_request.merged_by.login }}",
+            "commit_sha": "${{ github.event.pull_request.head.sha }}",
+            "changes_summary": "${{ github.event.pull_request.body }}",
+            "compliance_status": "$([ "$COMPLIANCE_VIOLATION" = "true" ] && echo "violation" || echo "compliant")",
+            "emergency_change": "$([ "$EMERGENCY_CHANGE" = "true" ] && echo "true" || echo "false")",
+            "business_justification_provided": "$([ "$MISSING_JUSTIFICATION" = "true" ] && echo "false" || echo "true")",
+            "security_scan_passed": "${{ needs.security-scan.result == 'success' }}",
+            "audit_trail_id": "${{ github.run_id }}"
+          }
+          EOF
+
+      - name: Store audit log
+        run: |
+          # In a real scenario, this would be sent to a compliance logging system
+          echo "📝 Storing SOX audit log for compliance tracking..."
+          
+          # Example: Send to external compliance system
+          # curl -X POST "${{ secrets.COMPLIANCE_ENDPOINT }}" \
+          #   -H "Authorization: Bearer ${{ secrets.COMPLIANCE_TOKEN }}" \
+          #   -H "Content-Type: application/json" \
+          #   -d @sox-audit-log.json
+
+      - name: Fail on compliance violation
+        if: env.COMPLIANCE_VIOLATION == 'true'
+        run: |
+          echo "::error::SOX compliance violation detected"
+          echo "::notice::All production flag changes must be reviewed and approved"
+          exit 1
+
+  # Production flag validation with required approvals
+  production-validation:
+    name: Production Flag Validation
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/reusable-pr-validation.yml
+    with:
+      manifest-path: 'flags.json'
+      remote-source: ${{ secrets.PRODUCTION_FLAG_URL }}
+      strict-mode: true
+      post-comments: true
+      workflow-name: 'Production Compliance Check'
+    secrets:
+      auth-token: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+      slack-webhook: ${{ secrets.SECURITY_SLACK_WEBHOOK }}
+
+  # Required security team approval for sensitive changes
+  security-approval:
+    name: Security Team Approval
+    if: |
+      github.event_name == 'pull_request' && (
+        needs.security-scan.outputs.SECURITY_ISSUES_FOUND == 'true' ||
+        needs.production-validation.outputs.has-differences == 'true'
+      )
+    needs: [security-scan, production-validation]
+    runs-on: ubuntu-latest
+    environment: security-review  # Requires manual approval
+
+    steps:
+      - name: Security review checkpoint
+        run: |
+          echo "🛡️ Security team review completed"
+          echo "::notice::Production flag changes have been approved by security team"
+
+  # Compliance monitoring and alerting
+  compliance-monitoring:
+    name: Compliance Monitoring
+    if: github.event_name == 'schedule' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compliance drift detection
+        uses: ./.github/workflows/reusable-drift-detection.yml
+        with:
+          manifest-path: 'flags.json'
+          environments: '["production"]'
+          fail-on-drift: false
+          create-issue-on-drift: true
+          issue-labels: 'compliance,drift-detected,security-review'
+        secrets:
+          PRODUCTION_FLAG_URL: ${{ secrets.PRODUCTION_FLAG_URL }}
+          PRODUCTION_FLAG_TOKEN: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate compliance report
+        run: |
+          cat << EOF > compliance-report.md
+          # 📊 Daily Compliance Report
+          
+          **Date:** $(date -u +%Y-%m-%d)
+          **Framework:** ${{ env.COMPLIANCE_FRAMEWORK }}
+          **Repository:** ${{ github.repository }}
+          
+          ## Compliance Status
+          - **Production Drift:** ${{ steps.drift-check.outputs.has-differences || 'No drift detected' }}
+          - **Security Scan:** Passed
+          - **Audit Trail:** Complete
+          
+          ## Actions Taken
+          - Automated compliance checks completed
+          - Drift monitoring active
+          - Security scanning performed
+          
+          ## Next Review
+          **Date:** $(date -u -d '+1 day' +%Y-%m-%d)
+          EOF
+
+      - name: Archive compliance report
+        uses: actions/upload-artifact@v3
+        with:
+          name: compliance-report-$(date +%Y%m%d)
+          path: compliance-report.md
+          retention-days: 2555  # 7 years for compliance
+
+  # Security incident response
+  security-incident-response:
+    name: Security Incident Response
+    if: |
+      needs.security-scan.outputs.SECURITY_ISSUES_FOUND == 'true' ||
+      needs.production-validation.outputs.has-differences == 'true'
+    needs: [security-scan, production-validation]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create security incident
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const title = '🚨 Security Incident - Flag Configuration Issues Detected';
+            const body = `## Security Incident Report
+            
+            **Incident ID:** SEC-${new Date().toISOString().split('T')[0]}-${context.runId}
+            **Detection Time:** ${new Date().toISOString()}
+            **Severity:** ${process.env.SECURITY_ISSUES_FOUND === 'true' ? 'HIGH' : 'MEDIUM'}
+            
+            ### Detected Issues
+            ${process.env.SECURITY_ISSUES_FOUND === 'true' ? '- Security vulnerabilities in flag configuration' : ''}
+            ${process.env.PRODUCTION_DIFFERENCES === 'true' ? '- Unauthorized production flag changes' : ''}
+            
+            ### Immediate Actions Required
+            1. Review flag configuration for security issues
+            2. Validate all recent changes
+            3. Assess impact on production systems
+            4. Implement corrective measures
+            
+            ### Investigation
+            - **Workflow Run:** [${context.runId}](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            - **Commit:** ${context.sha}
+            - **Actor:** ${context.actor}
+            
+            **Assigned to:** ${{ env.SECURITY_TEAM }}
+            
+            ---
+            *This incident was automatically created by security monitoring.*`;
+            
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['security-incident', 'high-priority', 'feature-flags'],
+              assignees: ['security-team-lead']  // Replace with actual usernames
+            });
+            
+            core.setOutput('incident-number', issue.number);
+
+      - name: Notify security team
+        run: |
+          # Send immediate notification to security team
+          if [ -n "${{ secrets.SECURITY_SLACK_WEBHOOK }}" ]; then
+            curl -X POST -H 'Content-type: application/json' \
+              --data '{
+                "text": "🚨 SECURITY INCIDENT - Feature Flag Configuration",
+                "attachments": [{
+                  "color": "danger",
+                  "title": "Immediate Attention Required",
+                  "fields": [{
+                    "title": "Repository",
+                    "value": "${{ github.repository }}",
+                    "short": true
+                  }, {
+                    "title": "Incident Number",
+                    "value": "#${{ steps.create-security-incident.outputs.incident-number }}",
+                    "short": true
+                  }, {
+                    "title": "Detection Time",
+                    "value": "'$(date -u)'",
+                    "short": true
+                  }, {
+                    "title": "Workflow Run",
+                    "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>",
+                    "short": true
+                  }],
+                  "footer": "Security Monitoring System"
+                }]
+              }' \
+              ${{ secrets.SECURITY_SLACK_WEBHOOK }}
+          fi
+
+  # Final compliance summary
+  compliance-summary:
+    name: Compliance Summary
+    needs: [security-scan, sox-compliance, production-validation, security-approval]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate final compliance report
+        run: |
+          echo "## 🏆 Compliance Workflow Summary" > summary.md
+          echo "" >> summary.md
+          echo "**Timestamp:** $(date -u)" >> summary.md
+          echo "**Repository:** ${{ github.repository }}" >> summary.md
+          echo "**Framework:** ${{ env.COMPLIANCE_FRAMEWORK }}" >> summary.md
+          echo "" >> summary.md
+          
+          echo "### Job Results" >> summary.md
+          echo "- **Security Scan:** ${{ needs.security-scan.result }}" >> summary.md
+          echo "- **SOX Compliance:** ${{ needs.sox-compliance.result }}" >> summary.md
+          echo "- **Production Validation:** ${{ needs.production-validation.result }}" >> summary.md
+          echo "- **Security Approval:** ${{ needs.security-approval.result }}" >> summary.md
+          echo "" >> summary.md
+          
+          # Determine overall compliance status
+          if [[ "${{ needs.security-scan.result }}" == "success" && 
+                "${{ needs.sox-compliance.result }}" != "failure" && 
+                "${{ needs.production-validation.result }}" == "success" ]]; then
+            echo "### ✅ COMPLIANCE PASSED" >> summary.md
+            echo "All compliance checks have passed successfully." >> summary.md
+          else
+            echo "### ❌ COMPLIANCE ISSUES DETECTED" >> summary.md
+            echo "Review the job results above and address any failures." >> summary.md
+          fi
+
+      - name: Add to step summary
+        run: |
+          cat summary.md >> $GITHUB_STEP_SUMMARY

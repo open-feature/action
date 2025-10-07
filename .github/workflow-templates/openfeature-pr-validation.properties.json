@@ -1,0 +1,16 @@
+{
+  "name": "OpenFeature PR Validation",
+  "description": "Validate feature flag changes in pull requests using OpenFeature Action. Automatically compares flag manifests and posts PR comments with differences.",
+  "iconName": "git-branch",
+  "categories": [
+    "Continuous Integration",
+    "Testing",
+    "Code Quality"
+  ],
+  "filePatterns": [
+    "package.json",
+    "flags.json",
+    "feature-flags.*",
+    "openfeature.*"
+  ]
+}

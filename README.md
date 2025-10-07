@@ -62,6 +62,23 @@ jobs:
           manifest: "flags.json"
 ```
 
+### Using Reusable Workflows (Recommended)
+
+```yaml
+name: Comprehensive Flag Validation
+on: pull_request
+
+jobs:
+  validate-flags:
+    uses: open-feature/openfeature-action/.github/workflows/reusable-pr-validation.yml@v1
+    with:
+      manifest-path: "flags.json"
+      strict-mode: false
+    secrets:
+      auth-token: ${{ secrets.FLAG_PROVIDER_TOKEN }}
+      slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
+```
+
 ### Remote Source Comparison
 
 ```yaml
@@ -103,6 +120,12 @@ jobs:
 - **[For DevOps](docs/guides/for-devops.md)** - CI/CD integration patterns
 - **[For Security Teams](docs/guides/for-security.md)** - Security and compliance
 - **[For Contributors](docs/guides/for-contributors.md)** - Development setup
+
+### Workflows & Automation
+
+- **[Reusable Workflows](docs/reusable-workflows.md)** - Production-ready workflow components
+- **[Workflow Templates](docs/workflow-templates.md)** - Quick-start templates
+- **[Advanced Examples](examples/workflows/)** - GitOps, security, and progressive delivery
 
 ### Resources
 

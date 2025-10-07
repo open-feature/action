@@ -44,8 +44,61 @@ When you create a pull request:
 3. **Posts a comment** on the PR if differences are found
 4. **Generates a summary** showing what flags were added, removed, or modified
 
+## Quick Start with Templates
+
+For even faster setup, use our ready-made workflow templates:
+
+### 🚀 Quick Start Template
+Perfect for beginners - just add to `.github/workflows/flag-validation.yml`:
+
+```yaml
+name: OpenFeature Quick Start
+on:
+  pull_request:
+    paths: ['flags.json']
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-flags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: open-feature/openfeature-action@v1
+        with:
+          manifest: 'flags.json'
+```
+
+### 🔍 Advanced PR Validation Template
+Uses reusable workflows for more features:
+
+```yaml
+name: Flag PR Validation
+on:
+  pull_request:
+    branches: [main]
+    paths: ['flags.json']
+
+jobs:
+  validate:
+    uses: open-feature/openfeature-action/.github/workflows/reusable-pr-validation.yml@v1
+    with:
+      manifest-path: 'flags.json'
+      strict-mode: false
+    secrets:
+      slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
+```
+
 ## Next Steps
 
+### Choose Your Path
+
+- **[Workflow Templates](workflow-templates.md)** - Ready-to-use starter templates
+- **[Reusable Workflows](reusable-workflows.md)** - Production-ready workflow components
 - **[Configuration](configuration.md)** - Learn about all available options
 - **[Basic Examples](examples/basic-usage.md)** - See more workflow examples
 - **[Remote Comparison](examples/remote-comparison.md)** - Compare against remote flag providers

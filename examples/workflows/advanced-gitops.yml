@@ -1,0 +1,395 @@
+# Advanced GitOps Integration Example
+# This workflow demonstrates integration with GitOps patterns, including:
+# - Automatic drift detection
+# - GitOps repository updates
+# - ArgoCD sync management
+# - Multi-cluster validation
+
+name: Advanced GitOps Flag Management
+
+on:
+  push:
+    branches: [main]
+    paths: ['flags.json', 'config/flags/**']
+  schedule:
+    - cron: '0 */2 * * *'  # Every 2 hours
+  workflow_dispatch:
+    inputs:
+      force-sync:
+        description: 'Force sync all environments'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+env:
+  GITOPS_REPO: 'your-org/gitops-config'
+  ARGOCD_SERVER: 'argocd.example.com'
+
+jobs:
+  # Detect drift across all environments
+  detect-drift:
+    name: Multi-Environment Drift Detection
+    uses: ./.github/workflows/reusable-drift-detection.yml
+    with:
+      manifest-path: 'flags.json'
+      environments: '["dev", "staging", "production"]'
+      fail-on-drift: false
+      create-issue-on-drift: true
+      issue-labels: 'gitops,drift-detected,feature-flags'
+    secrets:
+      DEV_FLAG_URL: ${{ secrets.DEV_FLAG_URL }}
+      DEV_FLAG_TOKEN: ${{ secrets.DEV_FLAG_TOKEN }}
+      STAGING_FLAG_URL: ${{ secrets.STAGING_FLAG_URL }}
+      STAGING_FLAG_TOKEN: ${{ secrets.STAGING_FLAG_TOKEN }}
+      PRODUCTION_FLAG_URL: ${{ secrets.PRODUCTION_FLAG_URL }}
+      PRODUCTION_FLAG_TOKEN: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Validate against multiple clusters
+  multi-cluster-validation:
+    name: Multi-Cluster Validation
+    uses: ./.github/workflows/reusable-multi-env.yml
+    with:
+      manifest-path: 'flags.json'
+      environments: '["us-east-1", "us-west-2", "eu-west-1"]'
+      validation-strategy: 'parallel'
+      strict-mode: false
+      include-summary: true
+    secrets:
+      # Cluster-specific endpoints
+      US_EAST_1_FLAG_URL: ${{ secrets.US_EAST_1_FLAG_URL }}
+      US_EAST_1_FLAG_TOKEN: ${{ secrets.US_EAST_1_FLAG_TOKEN }}
+      US_WEST_2_FLAG_URL: ${{ secrets.US_WEST_2_FLAG_URL }}
+      US_WEST_2_FLAG_TOKEN: ${{ secrets.US_WEST_2_FLAG_TOKEN }}
+      EU_WEST_1_FLAG_URL: ${{ secrets.EU_WEST_1_FLAG_URL }}
+      EU_WEST_1_FLAG_TOKEN: ${{ secrets.EU_WEST_1_FLAG_TOKEN }}
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+
+  # Update GitOps repository
+  update-gitops:
+    name: Update GitOps Repository
+    needs: [detect-drift, multi-cluster-validation]
+    if: |
+      github.event_name == 'push' || 
+      github.event.inputs.force-sync == 'true' ||
+      needs.detect-drift.outputs.drift-detected == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Update GitOps manifests
+        run: |
+          echo "🔄 Updating GitOps repository with latest flag configurations"
+          
+          # Copy updated manifests to GitOps repo
+          cp source/flags.json gitops/applications/flags/base/
+          
+          # Update environment-specific overlays
+          for env in dev staging production; do
+            if [ -f "source/config/flags/$env.json" ]; then
+              cp "source/config/flags/$env.json" "gitops/applications/flags/overlays/$env/"
+            fi
+          done
+
+      - name: Generate ArgoCD application updates
+        run: |
+          cd gitops
+          
+          # Update application manifests with new image or config versions
+          cat << EOF > applications/flags/application.yaml
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: feature-flags
+            namespace: argocd
+          spec:
+            project: default
+            source:
+              repoURL: https://github.com/${{ env.GITOPS_REPO }}
+              targetRevision: HEAD
+              path: applications/flags
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: feature-flags
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+              syncOptions:
+                - CreateNamespace=true
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          cd gitops
+          
+          git config user.name "OpenFeature GitOps Bot"
+          git config user.email "gitops@openfeature.dev"
+          
+          git add .
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "feat: update feature flags from ${{ github.repository }}@${{ github.sha }}
+            
+            Updated by: ${{ github.actor }}
+            Source commit: ${{ github.sha }}
+            Workflow: ${{ github.workflow }}
+            
+            Changes:
+            - Updated base flag configuration
+            - Synchronized environment overlays
+            - Drift detection: ${{ needs.detect-drift.outputs.drift-detected }}
+            "
+            
+            git push
+          fi
+
+  # Sync ArgoCD applications
+  argocd-sync:
+    name: ArgoCD Sync
+    needs: update-gitops
+    if: needs.update-gitops.result == 'success'
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        environment: [dev, staging, production]
+
+    steps:
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+          rm argocd-linux-amd64
+
+      - name: Login to ArgoCD
+        run: |
+          argocd login ${{ env.ARGOCD_SERVER }} \
+            --username ${{ secrets.ARGOCD_USERNAME }} \
+            --password ${{ secrets.ARGOCD_PASSWORD }} \
+            --insecure
+
+      - name: Sync ArgoCD application
+        run: |
+          APP_NAME="feature-flags-${{ matrix.environment }}"
+          
+          echo "🔄 Syncing ArgoCD application: $APP_NAME"
+          
+          # Check if app exists
+          if argocd app get $APP_NAME > /dev/null 2>&1; then
+            # Sync the application
+            argocd app sync $APP_NAME --prune
+            
+            # Wait for sync to complete
+            argocd app wait $APP_NAME --timeout 300
+            
+            # Check health
+            HEALTH=$(argocd app get $APP_NAME -o json | jq -r '.status.health.status')
+            SYNC=$(argocd app get $APP_NAME -o json | jq -r '.status.sync.status')
+            
+            echo "App health: $HEALTH"
+            echo "Sync status: $SYNC"
+            
+            if [ "$HEALTH" != "Healthy" ] || [ "$SYNC" != "Synced" ]; then
+              echo "::error::ArgoCD app $APP_NAME is not healthy or synced"
+              exit 1
+            fi
+          else
+            echo "::warning::ArgoCD application $APP_NAME not found"
+          fi
+
+  # Create drift resolution PR
+  create-drift-pr:
+    name: Create Drift Resolution PR
+    needs: detect-drift
+    if: needs.detect-drift.outputs.drift-detected == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create drift resolution branch
+        run: |
+          BRANCH_NAME="fix/auto-drift-resolution-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b $BRANCH_NAME
+          echo "branch-name=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Download drift results
+        uses: actions/download-artifact@v3
+        with:
+          name: drift-results
+          path: drift-analysis
+
+      - name: Generate drift resolution
+        run: |
+          echo "🔧 Analyzing drift and generating resolution..."
+          
+          AFFECTED_ENVS="${{ needs.detect-drift.outputs.affected-environments }}"
+          
+          # Create a drift resolution file
+          cat << EOF > DRIFT_RESOLUTION.md
+          # Automatic Drift Resolution
+          
+          **Detection Time:** $(date -u)
+          **Affected Environments:** $AFFECTED_ENVS
+          **Workflow Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          
+          ## Detected Issues
+          
+          Configuration drift has been detected between the local manifest and the following environments:
+          
+          EOF
+          
+          # Add detailed analysis from drift results
+          if [ -d "drift-analysis" ]; then
+            for file in drift-analysis/*.json; do
+              if [ -f "$file" ]; then
+                ENV=$(jq -r '.environment' "$file")
+                SUMMARY=$(jq -r '.summary' "$file")
+                echo "### $ENV Environment" >> DRIFT_RESOLUTION.md
+                echo "$SUMMARY" >> DRIFT_RESOLUTION.md
+                echo "" >> DRIFT_RESOLUTION.md
+              fi
+            done
+          fi
+          
+          cat << EOF >> DRIFT_RESOLUTION.md
+          
+          ## Recommended Actions
+          
+          1. Review the drift analysis above
+          2. Determine if changes should be:
+             - Applied to local manifest (update flags.json)
+             - Reverted in remote environments
+             - Accepted as intentional differences
+          3. Update this PR with the appropriate changes
+          4. Merge when resolved
+          
+          ---
+          *This PR was automatically created by the GitOps drift detection workflow.*
+          EOF
+
+      - name: Commit drift resolution
+        run: |
+          git config user.name "OpenFeature Drift Bot"
+          git config user.email "drift-bot@openfeature.dev"
+          
+          git add DRIFT_RESOLUTION.md
+          git commit -m "feat: automatic drift resolution for ${{ needs.detect-drift.outputs.affected-environments }}
+          
+          Detected drift in environments: ${{ needs.detect-drift.outputs.affected-environments }}
+          Detection workflow: ${{ github.run_id }}
+          
+          This PR contains analysis and recommendations for resolving the detected
+          configuration drift. Review the changes and apply appropriate fixes.
+          "
+
+      - name: Push branch and create PR
+        run: |
+          git push origin ${{ env.branch-name }}
+          
+          gh pr create \
+            --title "🚨 Automatic Drift Resolution - ${{ needs.detect-drift.outputs.affected-environments }}" \
+            --body-file DRIFT_RESOLUTION.md \
+            --label "drift-resolution,gitops,auto-generated" \
+            --assignee "${{ github.actor }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Notify on completion
+  notify-completion:
+    name: Notify GitOps Completion
+    needs: [detect-drift, multi-cluster-validation, update-gitops, argocd-sync]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate completion report
+        run: |
+          echo "## 🎯 GitOps Workflow Completion Report" > report.md
+          echo "" >> report.md
+          echo "**Timestamp:** $(date -u)" >> report.md
+          echo "**Repository:** ${{ github.repository }}" >> report.md
+          echo "**Workflow:** ${{ github.workflow }}" >> report.md
+          echo "**Trigger:** ${{ github.event_name }}" >> report.md
+          echo "" >> report.md
+          
+          echo "### Job Results" >> report.md
+          echo "- **Drift Detection:** ${{ needs.detect-drift.result }}" >> report.md
+          echo "- **Multi-Cluster Validation:** ${{ needs.multi-cluster-validation.result }}" >> report.md
+          echo "- **GitOps Update:** ${{ needs.update-gitops.result }}" >> report.md
+          echo "- **ArgoCD Sync:** ${{ needs.argocd-sync.result }}" >> report.md
+          echo "" >> report.md
+          
+          if [ "${{ needs.detect-drift.outputs.drift-detected }}" = "true" ]; then
+            echo "### 🚨 Drift Detected" >> report.md
+            echo "**Affected Environments:** ${{ needs.detect-drift.outputs.affected-environments }}" >> report.md
+            echo "**Resolution:** Automatic PR created for review" >> report.md
+          else
+            echo "### ✅ No Drift Detected" >> report.md
+            echo "All environments are in sync with the source configuration." >> report.md
+          fi
+
+      - name: Slack notification
+        if: secrets.SLACK_WEBHOOK
+        run: |
+          DRIFT_STATUS="${{ needs.detect-drift.outputs.drift-detected }}"
+          
+          if [ "$DRIFT_STATUS" = "true" ]; then
+            COLOR="warning"
+            EMOJI="🚨"
+            MESSAGE="GitOps workflow completed with drift detection"
+          else
+            COLOR="good"
+            EMOJI="✅"
+            MESSAGE="GitOps workflow completed successfully"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "'$EMOJI' GitOps Flag Management Complete",
+              "attachments": [{
+                "color": "'$COLOR'",
+                "title": "GitOps Workflow Results",
+                "fields": [{
+                  "title": "Repository",
+                  "value": "${{ github.repository }}",
+                  "short": true
+                }, {
+                  "title": "Drift Detected",
+                  "value": "'$DRIFT_STATUS'",
+                  "short": true
+                }, {
+                  "title": "Affected Environments",
+                  "value": "${{ needs.detect-drift.outputs.affected-environments || 'None' }}",
+                  "short": true
+                }, {
+                  "title": "Workflow Run",
+                  "value": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>",
+                  "short": true
+                }],
+                "footer": "GitOps Flag Management"
+              }]
+            }' \
+            ${{ secrets.SLACK_WEBHOOK }}

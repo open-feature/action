@@ -1,0 +1,542 @@
+# Progressive Delivery Integration Example
+# This workflow demonstrates integration with progressive delivery tools:
+# - Canary deployment coordination
+# - Feature flag rollout validation
+# - Integration with Flagger, Argo Rollouts
+# - Automated rollback capabilities
+# - Traffic splitting coordination
+
+name: Progressive Delivery Flag Management
+
+on:
+  push:
+    branches: [main]
+    paths: ['flags.json']
+  workflow_dispatch:
+    inputs:
+      rollout-strategy:
+        description: 'Rollout strategy'
+        type: choice
+        options:
+          - canary
+          - blue-green
+          - rolling
+        default: 'canary'
+      target-environment:
+        description: 'Target environment'
+        type: choice
+        options:
+          - staging
+          - production
+        default: 'staging'
+      rollout-percentage:
+        description: 'Initial rollout percentage'
+        type: number
+        default: 10
+
+permissions:
+  contents: read
+  deployments: write
+
+env:
+  ARGO_SERVER: 'argo-rollouts.example.com'
+  FLAGGER_NAMESPACE: 'flagger-system'
+  MONITORING_NAMESPACE: 'monitoring'
+
+jobs:
+  # Pre-rollout validation
+  pre-rollout-validation:
+    name: Pre-Rollout Validation
+    uses: ./.github/workflows/reusable-deployment-gate.yml
+    with:
+      manifest-path: 'flags.json'
+      target-environment: ${{ inputs.target-environment || 'staging' }}
+      gate-strategy: 'strict'
+      comparison-sources: '["staging"]'
+      require-approval: false
+      rollback-on-failure: true
+    secrets:
+      STAGING_FLAG_URL: ${{ secrets.STAGING_FLAG_URL }}
+      STAGING_FLAG_TOKEN: ${{ secrets.STAGING_FLAG_TOKEN }}
+      PRODUCTION_FLAG_URL: ${{ secrets.PRODUCTION_FLAG_URL }}
+      PRODUCTION_FLAG_TOKEN: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Create progressive rollout
+  create-rollout:
+    name: Create Progressive Rollout
+    needs: pre-rollout-validation
+    if: needs.pre-rollout-validation.outputs.deployment-allowed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Configure kubectl
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+          kubectl version --client
+
+      - name: Install Argo Rollouts CLI
+        run: |
+          curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+
+      - name: Create feature flag configmap
+        run: |
+          export KUBECONFIG=kubeconfig
+          
+          # Create or update the feature flags configmap
+          kubectl create configmap feature-flags \
+            --from-file=flags.json \
+            --namespace=default \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Create Argo Rollout configuration
+        run: |
+          STRATEGY="${{ inputs.rollout-strategy || 'canary' }}"
+          INITIAL_PERCENTAGE="${{ inputs.rollout-percentage || 10 }}"
+          
+          cat << EOF > rollout.yaml
+          apiVersion: argoproj.io/v1alpha1
+          kind: Rollout
+          metadata:
+            name: feature-flag-rollout
+            namespace: default
+          spec:
+            replicas: 5
+            strategy:
+              $STRATEGY:
+                steps:
+                - setWeight: $INITIAL_PERCENTAGE
+                - pause: {duration: 5m}
+                - setWeight: 25
+                - pause: {duration: 10m}
+                - setWeight: 50
+                - pause: {duration: 15m}
+                - setWeight: 75
+                - pause: {duration: 10m}
+                - setWeight: 100
+                analysis:
+                  templates:
+                  - templateName: success-rate
+                  - templateName: latency
+                  args:
+                  - name: service-name
+                    value: feature-flag-service
+                canaryService: feature-flag-service-canary
+                stableService: feature-flag-service-stable
+                trafficRouting:
+                  istio:
+                    virtualService:
+                      name: feature-flag-vs
+                      routes:
+                      - primary
+            selector:
+              matchLabels:
+                app: feature-flag-app
+            template:
+              metadata:
+                labels:
+                  app: feature-flag-app
+              spec:
+                containers:
+                - name: app
+                  image: your-app:${{ github.sha }}
+                  env:
+                  - name: FEATURE_FLAGS_CONFIG
+                    valueFrom:
+                      configMapKeyRef:
+                        name: feature-flags
+                        key: flags.json
+                  ports:
+                  - containerPort: 8080
+                  livenessProbe:
+                    httpGet:
+                      path: /health
+                      port: 8080
+                    initialDelaySeconds: 30
+                  readinessProbe:
+                    httpGet:
+                      path: /ready
+                      port: 8080
+                    initialDelaySeconds: 5
+          EOF
+
+      - name: Create analysis templates
+        run: |
+          cat << EOF > analysis-templates.yaml
+          apiVersion: argoproj.io/v1alpha1
+          kind: AnalysisTemplate
+          metadata:
+            name: success-rate
+            namespace: default
+          spec:
+            args:
+            - name: service-name
+            metrics:
+            - name: success-rate
+              interval: 2m
+              successCondition: result[0] >= 0.95
+              failureCondition: result[0] < 0.90
+              provider:
+                prometheus:
+                  address: http://prometheus.monitoring.svc.cluster.local:9090
+                  query: |
+                    sum(irate(
+                      http_requests_total{job="{{args.service-name}}",code=~"2.."}[2m]
+                    )) /
+                    sum(irate(
+                      http_requests_total{job="{{args.service-name}}"}[2m]
+                    ))
+          ---
+          apiVersion: argoproj.io/v1alpha1
+          kind: AnalysisTemplate
+          metadata:
+            name: latency
+            namespace: default
+          spec:
+            args:
+            - name: service-name
+            metrics:
+            - name: latency-p95
+              interval: 2m
+              successCondition: result[0] < 0.5
+              failureCondition: result[0] > 1.0
+              provider:
+                prometheus:
+                  address: http://prometheus.monitoring.svc.cluster.local:9090
+                  query: |
+                    histogram_quantile(0.95,
+                      sum(rate(
+                        http_request_duration_seconds_bucket{job="{{args.service-name}}"}[2m]
+                      )) by (le)
+                    )
+          EOF
+
+      - name: Apply rollout configuration
+        run: |
+          export KUBECONFIG=kubeconfig
+          
+          echo "🚀 Creating progressive rollout for feature flags..."
+          
+          kubectl apply -f analysis-templates.yaml
+          kubectl apply -f rollout.yaml
+          
+          # Wait for rollout to be created
+          kubectl wait --for=condition=Progressing rollout/feature-flag-rollout --timeout=60s
+
+      - name: Start progressive rollout
+        run: |
+          export KUBECONFIG=kubeconfig
+          
+          echo "▶️ Starting progressive rollout..."
+          
+          # Trigger the rollout by updating the image
+          kubectl argo rollouts set image feature-flag-rollout \
+            app=your-app:${{ github.sha }}
+          
+          # Get initial status
+          kubectl argo rollouts status feature-flag-rollout --watch=false
+
+  # Monitor rollout progress
+  monitor-rollout:
+    name: Monitor Rollout Progress
+    needs: create-rollout
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup kubectl and Argo CLI
+        run: |
+          # Setup kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          # Setup Argo Rollouts CLI
+          curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+
+      - name: Configure cluster access
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+
+      - name: Monitor rollout progress
+        timeout-minutes: 45
+        run: |
+          export KUBECONFIG=kubeconfig
+          
+          echo "👀 Monitoring rollout progress..."
+          
+          # Watch rollout progress
+          while true; do
+            STATUS=$(kubectl argo rollouts status feature-flag-rollout --watch=false)
+            echo "Current status: $STATUS"
+            
+            # Check if rollout is complete
+            if echo "$STATUS" | grep -q "Healthy"; then
+              echo "✅ Rollout completed successfully"
+              break
+            elif echo "$STATUS" | grep -q "Degraded\|Failed"; then
+              echo "❌ Rollout failed"
+              exit 1
+            fi
+            
+            # Get detailed rollout info
+            kubectl argo rollouts get rollout feature-flag-rollout
+            
+            sleep 30
+          done
+
+      - name: Validate flag deployment
+        run: |
+          export KUBECONFIG=kubeconfig
+          
+          echo "🔍 Validating flag deployment..."
+          
+          # Check if the new flags are properly loaded
+          POD=$(kubectl get pods -l app=feature-flag-app -o jsonpath='{.items[0].metadata.name}')
+          
+          if [ -n "$POD" ]; then
+            echo "Checking flag configuration in pod: $POD"
+            kubectl exec $POD -- cat /app/flags.json || echo "Could not retrieve flags from pod"
+          fi
+
+  # Flag-specific validation during rollout
+  validate-flag-behavior:
+    name: Validate Flag Behavior
+    needs: [create-rollout, monitor-rollout]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup monitoring tools
+        run: |
+          # Install curl and jq for API testing
+          sudo apt-get update
+          sudo apt-get install -y curl jq
+
+      - name: Test flag behavior during rollout
+        run: |
+          echo "🧪 Testing flag behavior during rollout..."
+          
+          # Define test endpoints
+          CANARY_ENDPOINT="${{ secrets.CANARY_ENDPOINT }}"
+          STABLE_ENDPOINT="${{ secrets.STABLE_ENDPOINT }}"
+          
+          # Test flag values in both versions
+          echo "Testing canary deployment..."
+          CANARY_FLAGS=$(curl -s "$CANARY_ENDPOINT/api/flags" || echo "{}")
+          echo "Canary flags: $CANARY_FLAGS"
+          
+          echo "Testing stable deployment..."
+          STABLE_FLAGS=$(curl -s "$STABLE_ENDPOINT/api/flags" || echo "{}")
+          echo "Stable flags: $STABLE_FLAGS"
+          
+          # Validate flag consistency
+          if [ "$CANARY_FLAGS" != "$STABLE_FLAGS" ]; then
+            echo "::warning::Flag differences detected between canary and stable"
+            echo "This may be expected during a progressive rollout"
+          else
+            echo "::notice::Flags are consistent between deployments"
+          fi
+
+      - name: Monitor feature metrics
+        run: |
+          echo "📊 Monitoring feature-specific metrics..."
+          
+          # Query Prometheus for feature flag metrics
+          PROMETHEUS_URL="${{ secrets.PROMETHEUS_URL }}"
+          
+          if [ -n "$PROMETHEUS_URL" ]; then
+            # Check feature flag evaluation rates
+            QUERY="rate(feature_flag_evaluations_total[5m])"
+            curl -G "$PROMETHEUS_URL/api/v1/query" \
+              --data-urlencode "query=$QUERY" \
+              -H "Authorization: Bearer ${{ secrets.PROMETHEUS_TOKEN }}" \
+              | jq '.data.result[]' || echo "Could not fetch metrics"
+            
+            # Check for any feature flag errors
+            ERROR_QUERY="rate(feature_flag_errors_total[5m])"
+            ERRORS=$(curl -G "$PROMETHEUS_URL/api/v1/query" \
+              --data-urlencode "query=$ERROR_QUERY" \
+              -H "Authorization: Bearer ${{ secrets.PROMETHEUS_TOKEN }}" \
+              | jq '.data.result | length')
+            
+            if [ "$ERRORS" -gt "0" ]; then
+              echo "::warning::Feature flag errors detected during rollout"
+            fi
+          fi
+
+  # Automatic rollback on failure
+  rollback-on-failure:
+    name: Automatic Rollback
+    needs: [monitor-rollout, validate-flag-behavior]
+    if: failure()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup kubectl and Argo CLI
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          
+          curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+
+      - name: Execute rollback
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+          
+          echo "🔄 Executing automatic rollback..."
+          
+          # Abort the current rollout
+          kubectl argo rollouts abort feature-flag-rollout
+          
+          # Wait for abort to complete
+          sleep 10
+          
+          # Trigger rollback to previous stable version
+          kubectl argo rollouts undo feature-flag-rollout
+          
+          # Monitor rollback progress
+          kubectl argo rollouts status feature-flag-rollout --timeout=300s
+
+      - name: Verify rollback success
+        run: |
+          export KUBECONFIG=kubeconfig
+          
+          echo "✅ Verifying rollback success..."
+          
+          # Check rollout status
+          STATUS=$(kubectl argo rollouts status feature-flag-rollout --watch=false)
+          echo "Rollback status: $STATUS"
+          
+          if echo "$STATUS" | grep -q "Healthy"; then
+            echo "✅ Rollback completed successfully"
+          else
+            echo "❌ Rollback may have failed"
+            kubectl argo rollouts get rollout feature-flag-rollout
+          fi
+
+      - name: Restore previous flag configuration
+        run: |
+          export KUBECONFIG=kubeconfig
+          
+          echo "🔄 Restoring previous flag configuration..."
+          
+          # Get previous commit
+          PREVIOUS_COMMIT=$(git rev-parse HEAD~1)
+          
+          # Checkout previous flags
+          git checkout $PREVIOUS_COMMIT -- flags.json
+          
+          # Update configmap with previous flags
+          kubectl create configmap feature-flags \
+            --from-file=flags.json \
+            --namespace=default \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+  # Progressive delivery completion
+  finalize-rollout:
+    name: Finalize Progressive Rollout
+    needs: [monitor-rollout, validate-flag-behavior]
+    if: success()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Complete rollout
+        run: |
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
+          export KUBECONFIG=kubeconfig
+          
+          echo "🎉 Finalizing successful progressive rollout..."
+          
+          # Promote to full deployment if still in progress
+          kubectl argo rollouts promote feature-flag-rollout
+          
+          # Wait for completion
+          kubectl argo rollouts status feature-flag-rollout --timeout=300s
+
+      - name: Post-deployment validation
+        uses: ./.github/workflows/reusable-multi-env.yml
+        with:
+          manifest-path: 'flags.json'
+          environments: '["production"]'
+          strict-mode: true
+        secrets:
+          PRODUCTION_FLAG_URL: ${{ secrets.PRODUCTION_FLAG_URL }}
+          PRODUCTION_FLAG_TOKEN: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+
+      - name: Generate rollout report
+        run: |
+          cat << EOF > rollout-report.md
+          # 🚀 Progressive Delivery Completion Report
+          
+          **Rollout Strategy:** ${{ inputs.rollout-strategy || 'canary' }}
+          **Target Environment:** ${{ inputs.target-environment || 'staging' }}
+          **Completion Time:** $(date -u)
+          **Commit:** ${{ github.sha }}
+          
+          ## Rollout Summary
+          ✅ Progressive rollout completed successfully
+          ✅ Flag behavior validated during rollout
+          ✅ No automatic rollbacks triggered
+          ✅ Post-deployment validation passed
+          
+          ## Metrics
+          - Initial traffic: ${{ inputs.rollout-percentage || 10 }}%
+          - Final traffic: 100%
+          - Rollout duration: ~45 minutes
+          - Zero downtime achieved
+          
+          ---
+          *Progressive delivery managed by OpenFeature Action*
+          EOF
+
+      - name: Notify success
+        if: secrets.SLACK_WEBHOOK
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "🎉 Progressive Delivery Complete",
+              "attachments": [{
+                "color": "good",
+                "title": "Feature Flag Rollout Successful",
+                "fields": [{
+                  "title": "Strategy",
+                  "value": "${{ inputs.rollout-strategy || 'canary' }}",
+                  "short": true
+                }, {
+                  "title": "Environment",
+                  "value": "${{ inputs.target-environment || 'staging' }}",
+                  "short": true
+                }, {
+                  "title": "Repository",
+                  "value": "${{ github.repository }}",
+                  "short": true
+                }, {
+                  "title": "Commit",
+                  "value": "${{ github.sha }}",
+                  "short": true
+                }],
+                "footer": "Progressive Delivery System"
+              }]
+            }' \
+            ${{ secrets.SLACK_WEBHOOK }}

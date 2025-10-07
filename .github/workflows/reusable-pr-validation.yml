@@ -1,0 +1,223 @@
+name: 'Reusable PR Validation'
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        description: 'Path to the manifest file to validate'
+        required: false
+        type: string
+        default: 'flags.json'
+      base-branch:
+        description: 'Base branch to compare against (auto-detected if not specified)'
+        required: false
+        type: string
+      remote-source:
+        description: 'Remote source URL to compare against (optional)'
+        required: false
+        type: string
+      strict-mode:
+        description: 'Fail workflow if differences are detected'
+        required: false
+        type: boolean
+        default: false
+      post-comments:
+        description: 'Post PR comments with comparison results'
+        required: false
+        type: boolean
+        default: true
+      cli-version:
+        description: 'OpenFeature CLI version to use'
+        required: false
+        type: string
+        default: 'latest'
+      include-git-comparison:
+        description: 'Include git comparison in addition to remote comparison'
+        required: false
+        type: boolean
+        default: true
+      workflow-name:
+        description: 'Custom name for the workflow run'
+        required: false
+        type: string
+        default: 'Flag Validation'
+    secrets:
+      auth-token:
+        description: 'Authentication token for remote source'
+        required: false
+      slack-webhook:
+        description: 'Slack webhook URL for notifications'
+        required: false
+    outputs:
+      has-differences:
+        description: 'Whether any differences were detected'
+        value: ${{ jobs.validate.outputs.has-differences }}
+      git-differences:
+        description: 'Whether git comparison found differences'
+        value: ${{ jobs.validate.outputs.git-differences }}
+      remote-differences:
+        description: 'Whether remote comparison found differences'
+        value: ${{ jobs.validate.outputs.remote-differences }}
+      summary:
+        description: 'Summary of all comparisons'
+        value: ${{ jobs.validate.outputs.summary }}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: ${{ inputs.workflow-name }}
+    outputs:
+      has-differences: ${{ steps.check-results.outputs.has-differences }}
+      git-differences: ${{ steps.git-compare.outputs.has-differences }}
+      remote-differences: ${{ steps.remote-compare.outputs.has-differences }}
+      summary: ${{ steps.generate-summary.outputs.summary }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for git comparison
+
+      - name: Validate manifest file exists
+        run: |
+          if [ ! -f "${{ inputs.manifest-path }}" ]; then
+            echo "::error::Manifest file not found: ${{ inputs.manifest-path }}"
+            echo "::notice::Available files in repository root:"
+            ls -la
+            exit 1
+          fi
+          echo "::notice::Validating manifest: ${{ inputs.manifest-path }}"
+
+      - name: Git comparison - Check changes in PR
+        if: inputs.include-git-comparison
+        uses: open-feature/openfeature-action@v1
+        id: git-compare
+        with:
+          manifest: ${{ inputs.manifest-path }}
+          base-branch: ${{ inputs.base-branch }}
+          cli-version: ${{ inputs.cli-version }}
+          post-pr-comment: ${{ inputs.post-comments }}
+          strict: false  # Don't fail on git comparison, let remote comparison decide
+
+      - name: Remote comparison - Check against source of truth
+        if: inputs.remote-source
+        uses: open-feature/openfeature-action@v1
+        id: remote-compare
+        with:
+          manifest: ${{ inputs.manifest-path }}
+          against: ${{ inputs.remote-source }}
+          auth-token: ${{ secrets.auth-token }}
+          cli-version: ${{ inputs.cli-version }}
+          post-pr-comment: ${{ inputs.post-comments }}
+          strict: false  # Don't fail here, let final check decide
+
+      - name: Check overall results
+        id: check-results
+        run: |
+          GIT_DIFF="${{ steps.git-compare.outputs.has-differences || 'false' }}"
+          REMOTE_DIFF="${{ steps.remote-compare.outputs.has-differences || 'false' }}"
+          
+          # Determine if any comparison found differences
+          if [[ "$GIT_DIFF" == "true" ]] || [[ "$REMOTE_DIFF" == "true" ]]; then
+            echo "has-differences=true" >> $GITHUB_OUTPUT
+            echo "::notice::Differences detected in flag validation"
+          else
+            echo "has-differences=false" >> $GITHUB_OUTPUT
+            echo "::notice::No differences detected - flags are in sync"
+          fi
+
+      - name: Generate comprehensive summary
+        id: generate-summary
+        run: |
+          cat << 'EOF' > summary.md
+          ## 🚀 Flag Validation Summary
+          
+          **Manifest:** `${{ inputs.manifest-path }}`
+          **PR:** #${{ github.event.pull_request.number }}
+          **Branch:** `${{ github.head_ref }}`
+          
+          ### Results Overview
+          EOF
+          
+          if [[ "${{ inputs.include-git-comparison }}" == "true" ]]; then
+            cat << 'EOF' >> summary.md
+          
+          #### 📝 Git Comparison (PR Changes)
+          - **Has Changes:** ${{ steps.git-compare.outputs.has-differences }}
+          - **Details:** ${{ steps.git-compare.outputs.summary }}
+          EOF
+          fi
+          
+          if [[ "${{ inputs.remote-source }}" != "" ]]; then
+            cat << 'EOF' >> summary.md
+          
+          #### 🌐 Remote Source Comparison
+          - **Source:** `${{ inputs.remote-source }}`
+          - **Has Differences:** ${{ steps.remote-compare.outputs.has-differences }}
+          - **Details:** ${{ steps.remote-compare.outputs.summary }}
+          EOF
+          fi
+          
+          cat << 'EOF' >> summary.md
+          
+          ### 📊 Overall Status
+          - **Any Differences:** ${{ steps.check-results.outputs.has-differences }}
+          - **Validation:** ${{ steps.check-results.outputs.has-differences == 'true' && '⚠️ Review Required' || '✅ All Clear' }}
+          EOF
+          
+          # Set output
+          {
+            echo "summary<<EOF"
+            cat summary.md
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Add to step summary
+        run: |
+          cat summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Slack notification
+        if: secrets.slack-webhook && steps.check-results.outputs.has-differences == 'true'
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "🚨 Flag differences detected in PR #${{ github.event.pull_request.number }}",
+              "attachments": [{
+                "color": "warning",
+                "fields": [{
+                  "title": "Repository",
+                  "value": "${{ github.repository }}",
+                  "short": true
+                }, {
+                  "title": "PR",
+                  "value": "<${{ github.event.pull_request.html_url }}|#${{ github.event.pull_request.number }}>",
+                  "short": true
+                }, {
+                  "title": "Manifest",
+                  "value": "${{ inputs.manifest-path }}",
+                  "short": true
+                }, {
+                  "title": "Git Changes",
+                  "value": "${{ steps.git-compare.outputs.has-differences }}",
+                  "short": true
+                }]
+              }]
+            }' \
+            ${{ secrets.slack-webhook }}
+
+      - name: Fail if strict mode and differences found
+        if: inputs.strict-mode && steps.check-results.outputs.has-differences == 'true'
+        run: |
+          echo "::error::Strict mode enabled - failing due to detected differences"
+          echo "::notice::Review the flag changes and ensure they are intentional"
+          exit 1
+
+      - name: Success message
+        if: steps.check-results.outputs.has-differences == 'false'
+        run: |
+          echo "::notice::✅ Flag validation passed - no differences detected"
+          echo "::notice::Your flags are in sync with the target sources"
