@@ -1,0 +1,44 @@
+name: OpenFeature Quick Start
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['flags.json']  # Update to match your manifest file
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-flags:
+    runs-on: ubuntu-latest
+    name: Quick Flag Validation
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for git comparison
+      
+      - name: Validate flag changes
+        uses: open-feature/openfeature-action@v1
+        id: validate
+        with:
+          manifest: 'flags.json'  # Update to match your manifest file path
+          # Compares against PR base branch automatically
+          post-pr-comment: true
+          strict: false
+          cli-version: 'latest'
+      
+      - name: Show results
+        run: |
+          echo "### 🚀 Flag Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Has Differences:** ${{ steps.validate.outputs.has-differences }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Summary:** ${{ steps.validate.outputs.summary }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.validate.outputs.has-differences }}" = "true" ]; then
+            echo "::notice::Flag changes detected - review the differences in the PR comment"
+          else
+            echo "::notice::No flag changes detected"
+          fi

@@ -1,0 +1,14 @@
+{
+  "name": "OpenFeature Quick Start",
+  "description": "Simple feature flag validation for pull requests. Perfect for getting started with OpenFeature Action - just validates flag changes and posts PR comments.",
+  "iconName": "rocket",
+  "categories": [
+    "Continuous Integration",
+    "Getting Started"
+  ],
+  "filePatterns": [
+    "flags.json",
+    "feature-flags.*",
+    "openfeature.*"
+  ]
+}

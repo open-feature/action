@@ -1,0 +1,440 @@
+name: 'Reusable Multi-Environment Validation'
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        description: 'Path to the manifest file to validate'
+        required: false
+        type: string
+        default: 'flags.json'
+      environments:
+        description: 'JSON array of environments to validate (e.g., ["dev", "staging", "production"])'
+        required: false
+        type: string
+        default: '["staging", "production"]'
+      cli-version:
+        description: 'OpenFeature CLI version to use'
+        required: false
+        type: string
+        default: 'latest'
+      fail-fast:
+        description: 'Stop validation on first failure'
+        required: false
+        type: boolean
+        default: false
+      strict-mode:
+        description: 'Fail workflow if any differences are detected'
+        required: false
+        type: boolean
+        default: false
+      include-summary:
+        description: 'Generate comprehensive summary report'
+        required: false
+        type: boolean
+        default: true
+      validation-strategy:
+        description: 'Validation strategy: "parallel" or "sequential"'
+        required: false
+        type: string
+        default: 'parallel'
+      environment-dependencies:
+        description: 'JSON object defining environment validation order dependencies'
+        required: false
+        type: string
+        default: '{}'
+      timeout-minutes:
+        description: 'Timeout for each environment validation'
+        required: false
+        type: number
+        default: 10
+    secrets:
+      # Environment-specific flag URLs
+      DEV_FLAG_URL:
+        required: false
+      STAGING_FLAG_URL:
+        required: false
+      PRODUCTION_FLAG_URL:
+        required: false
+      QA_FLAG_URL:
+        required: false
+      # Environment-specific auth tokens
+      DEV_FLAG_TOKEN:
+        required: false
+      STAGING_FLAG_TOKEN:
+        required: false
+      PRODUCTION_FLAG_TOKEN:
+        required: false
+      QA_FLAG_TOKEN:
+        required: false
+      # Notification webhooks
+      SLACK_WEBHOOK:
+        required: false
+      TEAMS_WEBHOOK:
+        required: false
+    outputs:
+      validation-passed:
+        description: 'Whether validation passed for all environments'
+        value: ${{ jobs.analyze-results.outputs.validation-passed }}
+      failed-environments:
+        description: 'List of environments that failed validation'
+        value: ${{ jobs.analyze-results.outputs.failed-environments }}
+      environments-with-differences:
+        description: 'List of environments with flag differences'
+        value: ${{ jobs.analyze-results.outputs.environments-with-differences }}
+      validation-summary:
+        description: 'Complete validation summary'
+        value: ${{ jobs.analyze-results.outputs.validation-summary }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate-environments:
+    runs-on: ubuntu-latest
+    name: Validate ${{ matrix.environment }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    
+    strategy:
+      matrix:
+        environment: ${{ fromJson(inputs.environments) }}
+      fail-fast: ${{ inputs.fail-fast }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate manifest file exists
+        run: |
+          if [ ! -f "${{ inputs.manifest-path }}" ]; then
+            echo "::error::Manifest file not found: ${{ inputs.manifest-path }}"
+            exit 1
+          fi
+
+      - name: Get environment configuration
+        id: env-config
+        run: |
+          ENV_UPPER=$(echo "${{ matrix.environment }}" | tr '[:lower:]' '[:upper:]')
+          echo "env-upper=$ENV_UPPER" >> $GITHUB_OUTPUT
+          
+          # Determine flag URL based on environment
+          case "${{ matrix.environment }}" in
+            "dev"|"development")
+              echo "flag-url=${{ secrets.DEV_FLAG_URL }}" >> $GITHUB_OUTPUT
+              echo "auth-token=${{ secrets.DEV_FLAG_TOKEN }}" >> $GITHUB_OUTPUT
+              ;;
+            "staging"|"stage")
+              echo "flag-url=${{ secrets.STAGING_FLAG_URL }}" >> $GITHUB_OUTPUT
+              echo "auth-token=${{ secrets.STAGING_FLAG_TOKEN }}" >> $GITHUB_OUTPUT
+              ;;
+            "production"|"prod")
+              echo "flag-url=${{ secrets.PRODUCTION_FLAG_URL }}" >> $GITHUB_OUTPUT
+              echo "auth-token=${{ secrets.PRODUCTION_FLAG_TOKEN }}" >> $GITHUB_OUTPUT
+              ;;
+            "qa"|"test")
+              echo "flag-url=${{ secrets.QA_FLAG_URL }}" >> $GITHUB_OUTPUT
+              echo "auth-token=${{ secrets.QA_FLAG_TOKEN }}" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "::warning::No specific configuration for environment: ${{ matrix.environment }}"
+              echo "flag-url=" >> $GITHUB_OUTPUT
+              echo "auth-token=" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Validate ${{ matrix.environment }} environment
+        uses: open-feature/openfeature-action@v1
+        id: validate
+        continue-on-error: true
+        with:
+          manifest: ${{ inputs.manifest-path }}
+          against: ${{ steps.env-config.outputs.flag-url }}
+          auth-token: ${{ steps.env-config.outputs.auth-token }}
+          cli-version: ${{ inputs.cli-version }}
+          post-pr-comment: false
+          against-manifest-path: ${{ matrix.environment }}-flags.json
+          strict: false  # Handle failures at the job level
+
+      - name: Generate environment report
+        run: |
+          mkdir -p validation-results
+          
+          # Determine status
+          if [ "${{ steps.validate.outcome }}" = "failure" ]; then
+            STATUS="failed"
+            STATUS_ICON="❌"
+          elif [ "${{ steps.validate.outputs.has-differences }}" = "true" ]; then
+            STATUS="differences"
+            STATUS_ICON="⚠️"
+          else
+            STATUS="passed"
+            STATUS_ICON="✅"
+          fi
+          
+          cat << EOF > validation-results/${{ matrix.environment }}.json
+          {
+            "environment": "${{ matrix.environment }}",
+            "status": "$STATUS",
+            "has_differences": "${{ steps.validate.outputs.has-differences }}",
+            "summary": "${{ steps.validate.outputs.summary }}",
+            "flag_url": "${{ steps.env-config.outputs.flag-url }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "workflow_run": "${{ github.run_id }}",
+            "validation_outcome": "${{ steps.validate.outcome }}"
+          }
+          EOF
+          
+          # Create markdown report
+          cat << EOF > validation-results/${{ matrix.environment }}.md
+          ## $STATUS_ICON ${{ matrix.environment }}
+          
+          **Status:** $STATUS
+          **Timestamp:** $(date -u)
+          **Has Differences:** ${{ steps.validate.outputs.has-differences }}
+          
+          ### Summary
+          ${{ steps.validate.outputs.summary }}
+          
+          ### Configuration
+          - **Source URL:** ${{ steps.env-config.outputs.flag-url }}
+          - **Manifest:** ${{ inputs.manifest-path }}
+          - **CLI Version:** ${{ inputs.cli-version }}
+          EOF
+
+      - name: Upload validation results
+        uses: actions/upload-artifact@v3
+        with:
+          name: validation-${{ matrix.environment }}
+          path: validation-results/
+          retention-days: 30
+
+      - name: Environment validation status
+        run: |
+          case "${{ steps.validate.outcome }}" in
+            "failure")
+              echo "::error::❌ ${{ matrix.environment }} validation failed"
+              ;;
+            "success")
+              if [ "${{ steps.validate.outputs.has-differences }}" = "true" ]; then
+                echo "::warning::⚠️ ${{ matrix.environment }} has flag differences"
+              else
+                echo "::notice::✅ ${{ matrix.environment }} validation passed"
+              fi
+              ;;
+          esac
+
+  analyze-results:
+    needs: validate-environments
+    runs-on: ubuntu-latest
+    name: Analyze Multi-Environment Results
+    outputs:
+      validation-passed: ${{ steps.analyze.outputs.validation-passed }}
+      failed-environments: ${{ steps.analyze.outputs.failed-environments }}
+      environments-with-differences: ${{ steps.analyze.outputs.environments-with-differences }}
+      validation-summary: ${{ steps.generate-summary.outputs.summary }}
+
+    steps:
+      - name: Download all validation results
+        uses: actions/download-artifact@v3
+        with:
+          path: all-validation-results
+
+      - name: Analyze validation results
+        id: analyze
+        run: |
+          VALIDATION_PASSED=true
+          FAILED_ENVS=""
+          DIFF_ENVS=""
+          TOTAL_ENVS=0
+          PASSED_ENVS=0
+          FAILED_COUNT=0
+          DIFF_COUNT=0
+          
+          echo "## 🌍 Multi-Environment Validation Results" > analysis.md
+          echo "" >> analysis.md
+          echo "**Validation Time:** $(date -u)" >> analysis.md
+          echo "**Manifest:** \`${{ inputs.manifest-path }}\`" >> analysis.md
+          echo "**Strategy:** ${{ inputs.validation-strategy }}" >> analysis.md
+          echo "" >> analysis.md
+          
+          # Process each environment result
+          for env_dir in all-validation-results/validation-*; do
+            if [ -d "$env_dir" ]; then
+              JSON_FILE="$env_dir"/*.json
+              MD_FILE="$env_dir"/*.md
+              
+              if [ -f "$JSON_FILE" ]; then
+                ENV_NAME=$(jq -r '.environment' "$JSON_FILE")
+                STATUS=$(jq -r '.status' "$JSON_FILE")
+                HAS_DIFF=$(jq -r '.has_differences' "$JSON_FILE")
+                SUMMARY=$(jq -r '.summary' "$JSON_FILE")
+                
+                TOTAL_ENVS=$((TOTAL_ENVS + 1))
+                
+                case "$STATUS" in
+                  "failed")
+                    VALIDATION_PASSED=false
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                    if [ -z "$FAILED_ENVS" ]; then
+                      FAILED_ENVS="$ENV_NAME"
+                    else
+                      FAILED_ENVS="$FAILED_ENVS,$ENV_NAME"
+                    fi
+                    ;;
+                  "differences")
+                    DIFF_COUNT=$((DIFF_COUNT + 1))
+                    if [ -z "$DIFF_ENVS" ]; then
+                      DIFF_ENVS="$ENV_NAME"
+                    else
+                      DIFF_ENVS="$DIFF_ENVS,$ENV_NAME"
+                    fi
+                    ;;
+                  "passed")
+                    PASSED_ENVS=$((PASSED_ENVS + 1))
+                    ;;
+                esac
+                
+                # Append individual environment report
+                if [ -f "$MD_FILE" ]; then
+                  cat "$MD_FILE" >> analysis.md
+                  echo "" >> analysis.md
+                fi
+              fi
+            fi
+          done
+          
+          # Add summary statistics
+          cat << EOF >> analysis.md
+          ## 📊 Summary Statistics
+          
+          - **Total Environments:** $TOTAL_ENVS
+          - **Passed:** $PASSED_ENVS ✅
+          - **With Differences:** $DIFF_COUNT ⚠️
+          - **Failed:** $FAILED_COUNT ❌
+          
+          ### Overall Status
+          EOF
+          
+          if [ "$VALIDATION_PASSED" = "true" ] && [ "$DIFF_COUNT" = "0" ]; then
+            echo "**🎉 ALL VALIDATIONS PASSED** - No differences detected across any environment" >> analysis.md
+          elif [ "$VALIDATION_PASSED" = "true" ] && [ "$DIFF_COUNT" -gt "0" ]; then
+            echo "**⚠️ VALIDATION COMPLETED WITH DIFFERENCES** - Review required for: $DIFF_ENVS" >> analysis.md
+          else
+            echo "**❌ VALIDATION FAILED** - Errors in: $FAILED_ENVS" >> analysis.md
+          fi
+          
+          # Set outputs
+          echo "validation-passed=$VALIDATION_PASSED" >> $GITHUB_OUTPUT
+          echo "failed-environments=$FAILED_ENVS" >> $GITHUB_OUTPUT
+          echo "environments-with-differences=$DIFF_ENVS" >> $GITHUB_OUTPUT
+          
+          echo "::notice::Validation passed: $VALIDATION_PASSED"
+          if [ "$FAILED_COUNT" -gt "0" ]; then
+            echo "::error::Failed environments: $FAILED_ENVS"
+          fi
+          if [ "$DIFF_COUNT" -gt "0" ]; then
+            echo "::warning::Environments with differences: $DIFF_ENVS"
+          fi
+
+      - name: Generate comprehensive summary
+        if: inputs.include-summary
+        id: generate-summary
+        run: |
+          {
+            echo "summary<<EOF"
+            cat analysis.md
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Add to step summary
+        if: inputs.include-summary
+        run: |
+          cat analysis.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Create validation matrix report
+        run: |
+          echo "## 🗂️ Environment Validation Matrix" > matrix.md
+          echo "" >> matrix.md
+          echo "| Environment | Status | Differences | Summary |" >> matrix.md
+          echo "|-------------|--------|-------------|---------|" >> matrix.md
+          
+          for env_dir in all-validation-results/validation-*; do
+            if [ -d "$env_dir" ]; then
+              JSON_FILE="$env_dir"/*.json
+              if [ -f "$JSON_FILE" ]; then
+                ENV_NAME=$(jq -r '.environment' "$JSON_FILE")
+                STATUS=$(jq -r '.status' "$JSON_FILE")
+                HAS_DIFF=$(jq -r '.has_differences' "$JSON_FILE")
+                SUMMARY=$(jq -r '.summary' "$JSON_FILE" | sed 's/|/-/g' | head -c 50)
+                
+                case "$STATUS" in
+                  "passed") STATUS_ICON="✅ Passed" ;;
+                  "differences") STATUS_ICON="⚠️ Differences" ;;
+                  "failed") STATUS_ICON="❌ Failed" ;;
+                  *) STATUS_ICON="❓ Unknown" ;;
+                esac
+                
+                echo "| $ENV_NAME | $STATUS_ICON | $HAS_DIFF | $SUMMARY... |" >> matrix.md
+              fi
+            fi
+          done
+          
+          echo "" >> matrix.md
+          cat matrix.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Slack notification for failures
+        if: secrets.SLACK_WEBHOOK && (steps.analyze.outputs.validation-passed == 'false' || steps.analyze.outputs.environments-with-differences != '')
+        run: |
+          FAILED="${{ steps.analyze.outputs.failed-environments }}"
+          DIFFS="${{ steps.analyze.outputs.environments-with-differences }}"
+          
+          if [ -n "$FAILED" ]; then
+            COLOR="danger"
+            TITLE="❌ Multi-Environment Validation Failed"
+            MESSAGE="Validation failed for: $FAILED"
+          elif [ -n "$DIFFS" ]; then
+            COLOR="warning"
+            TITLE="⚠️ Flag Differences Detected"
+            MESSAGE="Differences found in: $DIFFS"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "'$TITLE'",
+              "attachments": [{
+                "color": "'$COLOR'",
+                "fields": [{
+                  "title": "Repository",
+                  "value": "${{ github.repository }}",
+                  "short": true
+                }, {
+                  "title": "Manifest",
+                  "value": "${{ inputs.manifest-path }}",
+                  "short": true
+                }, {
+                  "title": "Failed Environments",
+                  "value": "'$FAILED'",
+                  "short": true
+                }, {
+                  "title": "Environments with Differences",
+                  "value": "'$DIFFS'",
+                  "short": true
+                }],
+                "footer": "Multi-Environment Validation"
+              }]
+            }' \
+            ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Fail workflow if strict mode and issues detected
+        if: inputs.strict-mode && (steps.analyze.outputs.validation-passed == 'false' || steps.analyze.outputs.environments-with-differences != '')
+        run: |
+          echo "::error::Multi-environment validation failed or found differences"
+          echo "::notice::Failed environments: ${{ steps.analyze.outputs.failed-environments }}"
+          echo "::notice::Environments with differences: ${{ steps.analyze.outputs.environments-with-differences }}"
+          exit 1
+
+      - name: Success message
+        if: steps.analyze.outputs.validation-passed == 'true' && steps.analyze.outputs.environments-with-differences == ''
+        run: |
+          echo "::notice::🎉 Multi-environment validation completed successfully"
+          echo "::notice::All flag configurations are consistent across environments"

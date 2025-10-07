@@ -1,0 +1,35 @@
+name: OpenFeature Drift Detection
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  detect-drift:
+    name: Detect Configuration Drift
+    uses: open-feature/openfeature-action/.github/workflows/reusable-drift-detection.yml@v1
+    with:
+      manifest-path: 'flags.json'  # Update to match your manifest file path
+      environments: '["staging", "production"]'  # Environments to check
+      schedule-description: 'Automated drift detection'
+      cli-version: 'latest'
+      fail-on-drift: false
+      create-issue-on-drift: true
+      issue-labels: 'drift-detected,feature-flags,needs-review'
+      notification-channels: '{"slack": true, "email": false}'
+    secrets:
+      # Configure environment-specific secrets:
+      STAGING_FLAG_URL: ${{ secrets.STAGING_FLAG_URL }}
+      STAGING_FLAG_TOKEN: ${{ secrets.STAGING_FLAG_TOKEN }}
+      PRODUCTION_FLAG_URL: ${{ secrets.PRODUCTION_FLAG_URL }}
+      PRODUCTION_FLAG_TOKEN: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+      
+      # Optional notification webhooks:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      # TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

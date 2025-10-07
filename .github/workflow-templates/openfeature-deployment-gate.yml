@@ -1,0 +1,81 @@
+name: OpenFeature Deployment Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for deployment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        default: 'staging'
+      gate-strategy:
+        description: 'Gate strategy'
+        required: false
+        type: choice
+        options:
+          - strict
+          - warn
+          - advisory
+        default: 'strict'
+
+permissions:
+  contents: read
+  deployments: write
+  issues: write
+
+jobs:
+  deployment-gate:
+    name: Deployment Gate
+    uses: open-feature/openfeature-action/.github/workflows/reusable-deployment-gate.yml@v1
+    with:
+      manifest-path: 'flags.json'  # Update to match your manifest file path
+      target-environment: ${{ inputs.environment }}
+      gate-strategy: ${{ inputs.gate-strategy }}
+      comparison-sources: '["staging"]'  # Compare against staging before prod
+      cli-version: 'latest'
+      timeout-minutes: 15
+      require-approval: true  # Require manual approval for differences
+      approval-timeout: 30
+      rollback-on-failure: false
+      notification-channels: '{"slack": true, "teams": false}'
+      deployment-metadata: '{
+        "version": "${{ github.ref_name }}",
+        "commit": "${{ github.sha }}",
+        "actor": "${{ github.actor }}"
+      }'
+    secrets:
+      # Environment-specific secrets:
+      STAGING_FLAG_URL: ${{ secrets.STAGING_FLAG_URL }}
+      STAGING_FLAG_TOKEN: ${{ secrets.STAGING_FLAG_TOKEN }}
+      PRODUCTION_FLAG_URL: ${{ secrets.PRODUCTION_FLAG_URL }}
+      PRODUCTION_FLAG_TOKEN: ${{ secrets.PRODUCTION_FLAG_TOKEN }}
+      
+      # Notification secrets:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Example deployment job that runs after gate passes
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    needs: deployment-gate
+    if: needs.deployment-gate.outputs.deployment-allowed == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Deploy application
+        run: |
+          echo "🚀 Deploying to ${{ inputs.environment }}..."
+          echo "Gate status: ${{ needs.deployment-gate.outputs.gate-status }}"
+          echo "Validation summary: ${{ needs.deployment-gate.outputs.validation-summary }}"
+          # Add your deployment steps here
+          
+      - name: Deployment success
+        run: |
+          echo "✅ Deployment to ${{ inputs.environment }} completed successfully"
