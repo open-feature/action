@@ -468,8 +468,8 @@ runs:
       with:
         header: openfeature-manifest-compare-${{ github.job }}
         message: |
-          ## 🚀 OpenFeature Manifest Comparison
-          
+          ## 🚀 OpenFeature Manifest Comparison (${{ github.job }})
+
           > [!WARNING]
           ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 
               format('> **Out of Sync with Upstream** - Your local manifest (`{0}`) differs from the remote source (`{1}`)', inputs.manifest, inputs.against) || 
