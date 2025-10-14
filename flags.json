@@ -10,7 +10,7 @@
       "targeting": {}
     },
     "featureToggleExample": {
-      "state": "ENABLED", 
+      "state": "DISABLED", 
       "variants": {
         "control": "control-experience",
         "treatment": "new-experience",
