@@ -1,7 +1,7 @@
 {
   "flags": {
     "enableNewUI": {
-      "state": "ENABLED",
+      "state": "DISABLED",
       "variants": {
         "on": true,
         "off": false
