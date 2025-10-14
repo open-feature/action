@@ -461,12 +461,12 @@ runs:
 
     - name: Post PR comment
       if: |
-        github.event_name == 'pull_request' && 
-        steps.compare.outputs.has-differences == 'true' && 
+        github.event_name == 'pull_request' &&
+        steps.compare.outputs.has-differences == 'true' &&
         inputs.post-pr-comment == 'true'
       uses: marocchino/sticky-pull-request-comment@v2
       with:
-        header: openfeature-manifest-compare-${{ hashFiles(inputs.manifest) }}
+        header: openfeature-manifest-compare-${{ github.job }}
         message: |
           ## 🚀 OpenFeature Manifest Comparison
           
@@ -510,12 +510,12 @@ runs:
 
     - name: Delete PR comment if no differences
       if: |
-        github.event_name == 'pull_request' && 
-        steps.compare.outputs.has-differences == 'false' && 
+        github.event_name == 'pull_request' &&
+        steps.compare.outputs.has-differences == 'false' &&
         inputs.post-pr-comment == 'true'
       uses: marocchino/sticky-pull-request-comment@v2
       with:
-        header: openfeature-manifest-compare-${{ hashFiles(inputs.manifest) }}
+        header: openfeature-manifest-compare-${{ github.job }}
         delete: true
 
     - name: Handle failure condition
