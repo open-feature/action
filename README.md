@@ -10,7 +10,6 @@
 <h2 align="center">OpenFeature Action</h2>
 <!-- x-hide-in-docs-end -->
 
-<!-- The 'github-badges' class is used in the docs -->
 <p align="center" class="github-badges">
   <a href="https://github.com/orgs/open-feature/projects/17">
     <img alt="work-in-progress" src="https://img.shields.io/badge/status-WIP-yellow" />
@@ -18,27 +17,21 @@
   <a href="https://cloud-native.slack.com/archives/C07DY4TUDK6">
     <img alt="Slack" src="https://img.shields.io/badge/slack-%40cncf%2Fopenfeature-brightgreen?style=flat&logo=slack" />
   </a>
-  <a href="https://github.com/open-feature/openfeature-action/releases">
-    <img alt="GitHub release" src="https://img.shields.io/github/v/release/open-feature/openfeature-action" />
+  <a href="https://github.com/open-feature/action/releases">
+    <img alt="GitHub release" src="https://img.shields.io/github/v/release/open-feature/action" />
   </a>
   <a href="LICENSE">
-    <img alt="License" src="https://img.shields.io/github/license/open-feature/openfeature-action" />
+    <img alt="License" src="https://img.shields.io/github/license/open-feature/action" />
   </a>
 </p>
 
 <!-- x-hide-in-docs-start -->
-
-> [!CAUTION]
-> The OpenFeature Action and CLI are experimental!
-> Feel free to give it a shot and provide feedback, but expect breaking changes.
 
 [OpenFeature](https://openfeature.dev) is an open specification that provides a vendor-agnostic, community-driven API for feature flagging that works with your favorite feature flag management tool or in-house solution.
 
 <!-- x-hide-in-docs-end -->
 
 The OpenFeature GitHub Action compares OpenFeature flag manifests between your local configuration stored in your git repository, and/or a remote source using the [OpenFeature CLI](https://github.com/open-feature/cli). This action helps teams maintain consistency between their local feature flag configurations and centralized flag management systems. It also enables **Feature-Flag Driven Development** by providing gitops for your feature flags.
-
-> **Note:** This project is being donated to the [Cloud Native Computing Foundation (CNCF)](https://www.cncf.io/) as part of the OpenFeature ecosystem.
 
 ## Table of Contents
 
@@ -155,7 +148,7 @@ jobs:
           fetch-depth: 0  # Required for git comparison
       
       - name: Compare flag manifests
-        uses: open-feature/openfeature-action@v1
+        uses: open-feature/action@v1
         with:
           manifest: "flags.json"
           # Automatically compares against PR base branch
@@ -176,7 +169,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Compare against production flags
-        uses: open-feature/openfeature-action@v1
+        uses: open-feature/action@v1
         with:
           against: "https://your-flag-provider.com/api/flags"
           manifest: "flags.json"
@@ -230,7 +223,7 @@ The action automatically detects the comparison mode based on the `against` inpu
 
 ```yaml
 - name: Validate flag changes
-  uses: open-feature/openfeature-action@v1
+  uses: open-feature/action@v1
   with:
     manifest: "flags.json"
 ```
@@ -239,7 +232,7 @@ The action automatically detects the comparison mode based on the `against` inpu
 
 ```yaml
 - name: Compare against develop
-  uses: open-feature/openfeature-action@v1
+  uses: open-feature/action@v1
   with:
     manifest: "flags.json"
     base-branch: "develop"
@@ -249,7 +242,7 @@ The action automatically detects the comparison mode based on the `against` inpu
 
 ```yaml
 - name: Check against production
-  uses: open-feature/openfeature-action@v1
+  uses: open-feature/action@v1
   with:
     against: "https://api.flagprovider.com/flags.json"
     manifest: "flags.json"
@@ -260,7 +253,7 @@ The action automatically detects the comparison mode based on the `against` inpu
 
 ```yaml
 - name: Compare two remote sources
-  uses: open-feature/openfeature-action@v1
+  uses: open-feature/action@v1
   with:
     manifest: "https://staging.flagprovider.com/flags.json"
     against: "https://production.flagprovider.com/flags.json"
@@ -274,7 +267,7 @@ The action automatically detects the comparison mode based on the `against` inpu
 
 ```yaml
 - name: Enforce flag sync
-  uses: open-feature/openfeature-action@v1
+  uses: open-feature/action@v1
   with:
     against: "https://api.flagprovider.com/flags.json"
     manifest: "flags.json"
@@ -286,7 +279,7 @@ The action automatically detects the comparison mode based on the `against` inpu
 ```yaml
 - name: Compare manifests
   id: compare
-  uses: open-feature/openfeature-action@v1
+  uses: open-feature/action@v1
   with:
     against: "https://api.flagprovider.com/flags.json"
     manifest: "flags.json"
@@ -316,7 +309,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Validate ${{ matrix.environment }}
-        uses: open-feature/openfeature-action@v1
+        uses: open-feature/action@v1
         with:
           against: ${{ secrets[format('FLAG_URL_{0}', upper(matrix.environment))] }}
           manifest: "flags.json"
@@ -328,7 +321,7 @@ jobs:
 
 ```yaml
 - name: Compare different paths
-  uses: open-feature/openfeature-action@v1
+  uses: open-feature/action@v1
   with:
     manifest: "new-location/flags.json"    # Current branch
     against: "old-location/flags.json"     # Base branch
@@ -346,7 +339,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Compare LaunchDarkly vs Flagsmith
-        uses: open-feature/openfeature-action@v1
+        uses: open-feature/action@v1
         with:
           manifest: "https://app.launchdarkly.com/api/v2/flags/export"
           against: "https://api.flagsmith.com/api/v1/environments/flags/"
@@ -354,7 +347,7 @@ jobs:
           auth-token: ${{ secrets.FLAGSMITH_TOKEN }}
           
       - name: Compare staging vs production
-        uses: open-feature/openfeature-action@v1
+        uses: open-feature/action@v1
         with:
           manifest: "https://staging-api.yourcompany.com/flags"
           against: "https://api.yourcompany.com/flags"
@@ -479,6 +472,7 @@ act pull_request -e .github/workflows/pr-validation.yml
    ```yaml
    auth-token: ${{ secrets.FLAG_SOURCE_TOKEN }}
    ```
+
 3. Test the URL manually:
 
    ```bash
@@ -536,8 +530,8 @@ Enable debug logging by setting `ACTIONS_STEP_DEBUG` secret to `true` in your re
 - Use specific action versions:
 
   ```yaml
-  uses: open-feature/openfeature-action@v1.2.3  # ✅ Specific version
-  uses: open-feature/openfeature-action@v1      # ❌ Moving tag
+  uses: open-feature/action@v1.2.3  # ✅ Specific version
+  uses: open-feature/action@v1      # ❌ Moving tag
   ```
 
 - Pin CLI versions for reproducible builds:
@@ -559,7 +553,7 @@ Enable debug logging by setting `ACTIONS_STEP_DEBUG` secret to `true` in your re
 ### Getting Help
 
 - 📖 **Documentation**: [OpenFeature Documentation](https://openfeature.dev/)
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/open-feature/openfeature-action/issues)
+- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/open-feature/action/issues)
 - 💬 **Community Chat**: [CNCF Slack #openfeature](https://cloud-native.slack.com/archives/C0344AANLA1)
 - 🛠️ **CLI Issues**: [OpenFeature CLI Repository](https://github.com/open-feature/cli)
 
@@ -588,8 +582,8 @@ We welcome contributions! Here's how to get started:
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/openfeature-action.git
-cd openfeature-action
+git clone https://github.com/YOUR_USERNAME/action.git
+cd action
 
 # Test your changes
 act -j test-action
@@ -613,8 +607,8 @@ act -j test-action
 
 Thanks to all our contributors:
 
-<a href="https://github.com/open-feature/openfeature-action/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=open-feature/openfeature-action" alt="Pictures of the folks who have contributed to the project" />
+<a href="https://github.com/open-feature/action/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=open-feature/action" alt="Pictures of the folks who have contributed to the project" />
 </a>
 
 Made with [contrib.rocks](https://contrib.rocks).

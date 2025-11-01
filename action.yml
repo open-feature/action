@@ -64,12 +64,12 @@ runs:
       shell: bash
       run: |
         echo "::group::Installing OpenFeature CLI"
-        
+
         # Define reusable functions
         is_url() {
           [[ "$1" =~ :// ]] || [[ "$1" =~ ^[^/]+:[^/] ]]
         }
-        
+
         get_target_branch() {
           if [ -n "${{ github.base_ref }}" ]; then
             echo "${{ github.base_ref }}"
@@ -79,7 +79,7 @@ runs:
             echo "main"
           fi
         }
-        
+
         pull_manifest() {
           local source_url="$1"
           local output_path="$2"
@@ -102,7 +102,7 @@ runs:
           
           echo "::notice::$description downloaded to $output_path"
         }
-        
+
         fetch_git_manifest() {
           local target_branch="$1"
           local remote_path="$2"
@@ -129,7 +129,7 @@ runs:
           
           echo "::notice::Successfully fetched manifest from branch $target_branch"
         }
-        
+
         generate_config_table() {
           local manifest_path="$1"
           
@@ -152,25 +152,25 @@ runs:
           
           echo "| **Strict Mode** | \`${{ inputs.strict }}\` |" >> $GITHUB_STEP_SUMMARY
         }
-        
+
         # Export functions for use in subsequent steps
         declare -f is_url get_target_branch pull_manifest fetch_git_manifest generate_config_table > /tmp/action_functions.sh
-        
+
         # Install CLI
         if [ "${{ inputs.cli-version }}" = "latest" ]; then
           VERSION=$(curl -s https://api.github.com/repos/open-feature/cli/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
         else
           VERSION="${{ inputs.cli-version }}"
         fi
-        
+
         echo "::notice::Installing OpenFeature CLI version: $VERSION"
         go install github.com/open-feature/cli/cmd/openfeature@${VERSION} 2>&1
         echo "$HOME/go/bin" >> $GITHUB_PATH
-        
+
         # Set CLI path for reuse
         CLI_PATH="$HOME/go/bin/openfeature"
         echo "CLI_PATH=$CLI_PATH" >> $GITHUB_ENV
-        
+
         # Verify installation
         $CLI_PATH version
         echo "::endgroup::"
@@ -179,10 +179,10 @@ runs:
       shell: bash
       run: |
         echo "::group::Resolving manifests"
-        
+
         # Source our functions
         source /tmp/action_functions.sh
-        
+
         # Resolve local manifest
         if is_url "${{ inputs.manifest }}"; then
           echo "::notice::Remote manifest URL detected: ${{ inputs.manifest }}"
@@ -196,7 +196,7 @@ runs:
             exit 1
           fi
         fi
-        
+
         # Resolve against manifest
         if is_url "${{ inputs.against }}"; then
           echo "::notice::Remote against URL detected: ${{ inputs.against }}"
@@ -221,13 +221,13 @@ runs:
           echo "::notice::Comparing same manifest path between branches: $remote_path"
           fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}"
         fi
-        
+
         # Verify against manifest exists
         if [ ! -f "${{ inputs.against-manifest-path }}" ]; then
           echo "::error::Against manifest file not found at ${{ inputs.against-manifest-path }}"
           exit 1
         fi
-        
+
         # Export paths for comparison step
         echo "LOCAL_MANIFEST_PATH=$LOCAL_MANIFEST_PATH" >> $GITHUB_ENV
         MANIFEST_SIZE=$(wc -c < "${{ inputs.against-manifest-path }}")
@@ -240,19 +240,19 @@ runs:
       shell: bash
       run: |
         echo "::group::Comparing manifests"
-        
+
         # Create output directory
         mkdir -p comparison-output
-        
+
         # Run comparison
         set +e
         COMPARE_OUTPUT=$($CLI_PATH compare --manifest "$LOCAL_MANIFEST_PATH" --against "${{ inputs.against-manifest-path }}" --output yaml 2>&1)
         COMPARE_EXIT_CODE=$?
         set -e
-        
+
         # Save raw output
         echo "$COMPARE_OUTPUT" > comparison-output/raw-output.txt
-        
+
         # Determine differences
         HAS_DIFFERENCES="false"
         if echo "$COMPARE_OUTPUT" | grep -q "No differences found between the manifests"; then
@@ -260,7 +260,7 @@ runs:
         elif [ -n "$COMPARE_OUTPUT" ]; then
           HAS_DIFFERENCES="true"
         fi
-        
+
         # Set outputs
         echo "has-differences=$HAS_DIFFERENCES" >> $GITHUB_OUTPUT
         echo "comparison-result<<EOF" >> $GITHUB_OUTPUT
@@ -268,7 +268,7 @@ runs:
         echo "EOF" >> $GITHUB_OUTPUT
         echo "against-manifest-path=${{ inputs.against-manifest-path }}" >> $GITHUB_OUTPUT
         echo "local-manifest-path=$LOCAL_MANIFEST_PATH" >> $GITHUB_OUTPUT
-        
+
         # Generate summary
         if [ "$HAS_DIFFERENCES" = "true" ]; then
           SUMMARY="🔍 Flag manifest differences detected between local and against sources"
@@ -277,21 +277,21 @@ runs:
           SUMMARY="✅ No differences found between local and against flag manifests"
           echo "::notice::Manifests are in sync"
         fi
-        
+
         echo "summary<<EOF" >> $GITHUB_OUTPUT
         echo "$SUMMARY" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
-        
+
         echo "::endgroup::"
 
     - name: Generate Summary
       shell: bash
       run: |
         echo "::group::Generating summary"
-        
+
         # Source our functions
         source /tmp/action_functions.sh
-        
+
         # Determine comparison type
         if is_url "${{ inputs.against }}"; then
           COMPARISON_TITLE="## 🌐 Upstream Provider Comparison"
@@ -303,14 +303,14 @@ runs:
           COMPARISON_SUBTITLE="Comparing against $target_branch branch"
           IS_REMOTE_URL="false"
         fi
-        
+
         # Header
         echo "$COMPARISON_TITLE" >> $GITHUB_STEP_SUMMARY
         echo "*$COMPARISON_SUBTITLE*" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
+
         HAS_DIFFERENCES="${{ steps.compare.outputs.has-differences }}"
-        
+
         if [ "$HAS_DIFFERENCES" = "true" ]; then
           # Status banner
           echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
@@ -445,7 +445,7 @@ runs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "</details>" >> $GITHUB_STEP_SUMMARY
         fi
-        
+
         # Footer
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "---" >> $GITHUB_STEP_SUMMARY
@@ -455,8 +455,8 @@ runs:
           echo "*💡 This comparison shows changes introduced in your branch compared to the target branch*" >> $GITHUB_STEP_SUMMARY
         fi
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "*Generated by [OpenFeature Manifest Compare Action](https://github.com/openfeature/openfeature-action)*" >> $GITHUB_STEP_SUMMARY
-        
+        echo "*Generated by [OpenFeature Manifest Compare Action](https://github.com/openfeature/action)*" >> $GITHUB_STEP_SUMMARY
+
         echo "::endgroup::"
 
     - name: Post PR comment
@@ -475,37 +475,37 @@ runs:
               format('> **Out of Sync with Upstream** - Your local manifest (`{0}`) differs from the remote source (`{1}`)', inputs.manifest, inputs.against) || 
               format('> **Git Changes Detected** - Your feature flag manifest has changes compared to the {0} branch', 
                      github.base_ref || inputs.base-branch || 'main') }}
-          
+
           ### 📊 Change Summary
-          
+
           | Change Type | Count | Description |
           |-------------|-------|-------------|
           | 🟢 **Additions** | **${{ env.ADD_COUNT }}** | New flags added |
           | 🔴 **Removals** | **${{ env.REMOVE_COUNT }}** | Flags removed |
           | 🟡 **Modifications** | **${{ env.MODIFY_COUNT }}** | Flags modified |
           | **Total** | **${{ env.TOTAL_CHANGES }}** | Total differences |
-          
+
           <details>
           <summary>📋 View detailed changes</summary>
-          
+
           ${{ env.CHANGE_DETAILS }}
-          
+
           </details>
-          
+
           <details>
           <summary>🔄 View manifest diff</summary>
-          
+
           ```diff
           ${{ env.MANIFEST_DIFF }}
           ```
-          
+
           </details>
-          
+
           ---
           ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 
               '*⚠️ Consider syncing with your upstream flag provider to avoid configuration drift*' || 
               '*📝 This comparison shows changes introduced in this PR*' }}
-          
+
           *This comment is automatically updated on each push*
 
     - name: Delete PR comment if no differences
@@ -523,7 +523,7 @@ runs:
       run: |
         HAS_DIFFERENCES="${{ steps.compare.outputs.has-differences }}"
         STRICT_MODE="${{ inputs.strict }}"
-        
+
         if [ "$HAS_DIFFERENCES" = "true" ] && [ "$STRICT_MODE" = "true" ]; then
           echo "::error::Manifest differences detected in strict mode"
           exit 1
