@@ -81,6 +81,57 @@ jobs:
           fi
           echo "::notice::Error handling test passed - action correctly failed with missing local file"
 
+      - name: Test error handling - invalid remote against URL
+        uses: ./
+        id: test-invalid-against
+        continue-on-error: true
+        with:
+          against: 'https://httpbin.org/status/404'
+          manifest: 'flags.json'
+          post-pr-comment: false
+
+      - name: Verify invalid against URL error handling
+        run: |
+          if [ "${{ steps.test-invalid-against.outcome }}" != "failure" ]; then
+            echo "::error::Expected test-invalid-against to fail but it didn't"
+            exit 1
+          fi
+          echo "::notice::Error handling test passed - action correctly failed with invalid against URL"
+
+      - name: Test error handling - authentication required (401)
+        uses: ./
+        id: test-auth-required
+        continue-on-error: true
+        with:
+          against: 'https://httpbin.org/status/401'
+          manifest: 'flags.json'
+          post-pr-comment: false
+
+      - name: Verify authentication error handling
+        run: |
+          if [ "${{ steps.test-auth-required.outcome }}" != "failure" ]; then
+            echo "::error::Expected test-auth-required to fail but it didn't"
+            exit 1
+          fi
+          echo "::notice::Error handling test passed - action correctly failed with 401 authentication error"
+
+      - name: Test error handling - invalid remote manifest URL
+        uses: ./
+        id: test-invalid-manifest
+        continue-on-error: true
+        with:
+          manifest: 'https://httpbin.org/status/500'
+          against: 'flags.json'
+          post-pr-comment: false
+
+      - name: Verify invalid manifest URL error handling
+        run: |
+          if [ "${{ steps.test-invalid-manifest.outcome }}" != "failure" ]; then
+            echo "::error::Expected test-invalid-manifest to fail but it didn't"
+            exit 1
+          fi
+          echo "::notice::Error handling test passed - action correctly failed with invalid manifest URL"
+
   test-yaml-parsing:
     runs-on: ubuntu-latest
     name: Test YAML output parsing

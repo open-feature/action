@@ -187,7 +187,7 @@ runs:
         if is_url "${{ inputs.manifest }}"; then
           echo "::notice::Remote manifest URL detected: ${{ inputs.manifest }}"
           LOCAL_MANIFEST_PATH="local-manifest.json"
-          pull_manifest "${{ inputs.manifest }}" "$LOCAL_MANIFEST_PATH" "${{ inputs.manifest-auth-token }}" "manifest"
+          pull_manifest "${{ inputs.manifest }}" "$LOCAL_MANIFEST_PATH" "${{ inputs.manifest-auth-token }}" "manifest" || exit 1
         else
           echo "::notice::Local manifest file detected: ${{ inputs.manifest }}"
           LOCAL_MANIFEST_PATH="${{ inputs.manifest }}"
@@ -200,7 +200,7 @@ runs:
         # Resolve against manifest
         if is_url "${{ inputs.against }}"; then
           echo "::notice::Remote against URL detected: ${{ inputs.against }}"
-          pull_manifest "${{ inputs.against }}" "${{ inputs.against-manifest-path }}" "${{ inputs.auth-token }}" "against manifest"
+          pull_manifest "${{ inputs.against }}" "${{ inputs.against-manifest-path }}" "${{ inputs.auth-token }}" "against manifest" || exit 1
         elif [ -n "${{ inputs.against }}" ] && [ -f "${{ inputs.against }}" ]; then
           # Against is a local file - copy it to the expected location
           echo "::notice::Local against file detected: ${{ inputs.against }}"
@@ -212,14 +212,14 @@ runs:
           target_branch=$(get_target_branch)
           remote_path="${{ inputs.against }}"
           echo "::notice::Comparing different paths - Base: $remote_path, Local: ${{ inputs.manifest }}"
-          fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}"
+          fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}" || exit 1
         else
           # No against specified - use same manifest path from target branch
           echo "::notice::Git mode detected for against source"
           target_branch=$(get_target_branch)
           remote_path="${{ inputs.manifest }}"
           echo "::notice::Comparing same manifest path between branches: $remote_path"
-          fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}"
+          fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}" || exit 1
         fi
 
         # Verify against manifest exists
