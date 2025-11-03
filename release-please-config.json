@@ -1,5 +1,6 @@
 {
   "release-type": "simple",
+  "bootstrap-sha": "f6e7e9ec86f0c5f1dd298eb55105e093bc08869",
   "signoff": "OpenFeature Bot <109696520+openfeaturebot@users.noreply.github.com>",
   "packages": {
     ".": {
