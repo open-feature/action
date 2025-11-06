@@ -39,6 +39,20 @@ inputs:
     description: 'Post a comment on the PR when differences are detected'
     required: false
     default: 'true'
+  push-enabled:
+    description: 'Enable push to remote source after comparison'
+    required: false
+    default: 'false'
+  push-to:
+    description: 'URL to push the manifest to (defaults to "against" URL if not specified)'
+    required: false
+  push-auth-token:
+    description: 'Authentication token for pushing (defaults to auth-token if not specified)'
+    required: false
+  push-only-on-sync:
+    description: 'Only push if manifests are already in sync - prevents initial sync (safety feature)'
+    required: false
+    default: 'false'
 
 outputs:
   has-differences:
@@ -56,6 +70,12 @@ outputs:
   summary:
     description: 'Human-readable summary of changes'
     value: ${{ steps.compare.outputs.summary }}
+  push-performed:
+    description: 'Whether push was performed'
+    value: ${{ steps.push.outputs.push-performed }}
+  push-result:
+    description: 'Result message from push operation'
+    value: ${{ steps.push.outputs.push-result }}
 
 runs:
   using: 'composite'
@@ -673,6 +693,121 @@ runs:
       with:
         header: openfeature-manifest-compare-${{ github.job }}
         delete: true
+
+    - name: Push manifest to remote
+      id: push
+      shell: bash
+      run: |
+        echo "::group::Push manifest to remote"
+
+        PUSH_ENABLED="${{ inputs.push-enabled }}"
+        PUSH_ONLY_ON_SYNC="${{ inputs.push-only-on-sync }}"
+        HAS_DIFFERENCES="${{ steps.compare.outputs.has-differences }}"
+
+        # Initialize outputs
+        echo "push-performed=false" >> $GITHUB_OUTPUT
+        echo "push-result=Push not performed" >> $GITHUB_OUTPUT
+
+        if [ "$PUSH_ENABLED" != "true" ]; then
+          echo "::notice::Push is disabled (push-enabled: false)"
+          echo "push-result=Push is disabled" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Check if we should skip push due to differences
+        if [ "$PUSH_ONLY_ON_SYNC" = "true" ] && [ "$HAS_DIFFERENCES" = "true" ]; then
+          echo "::warning::Push skipped - manifests are not in sync (push-only-on-sync is enabled)"
+          echo "push-result=Push skipped - manifests not in sync" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 0
+        fi
+
+        # Determine push destination (default to against URL if not specified)
+        PUSH_TO="${{ inputs.push-to }}"
+        if [ -z "$PUSH_TO" ]; then
+          PUSH_TO="${{ inputs.against }}"
+          echo "::notice::Using 'against' URL as push destination: $PUSH_TO"
+        else
+          echo "::notice::Using specified push destination: $PUSH_TO"
+        fi
+
+        # Verify push destination is not empty
+        if [ -z "$PUSH_TO" ]; then
+          echo "::error::Push destination is required when push-enabled is true. Please provide either 'push-to' or ensure 'against' is a valid URL."
+          echo "push-result=Error: Push destination not specified" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        # Verify push destination is a URL
+        if ! [[ "$PUSH_TO" =~ :// ]] && ! [[ "$PUSH_TO" =~ ^[^/]+:[^/] ]]; then
+          echo "::error::Push destination must be a URL, got: $PUSH_TO"
+          echo "::error::Hint: When using git comparison mode (non-URL 'against'), you must explicitly set 'push-to' to a valid URL"
+          echo "push-result=Error: Invalid push destination - expected URL" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        # Determine auth token (default to auth-token if push-auth-token not specified)
+        PUSH_AUTH_TOKEN="${{ inputs.push-auth-token }}"
+        if [ -z "$PUSH_AUTH_TOKEN" ]; then
+          PUSH_AUTH_TOKEN="${{ inputs.auth-token }}"
+          if [ -n "$PUSH_AUTH_TOKEN" ]; then
+            echo "::notice::Using auth-token for push authentication"
+          fi
+        else
+          echo "::notice::Using push-auth-token for push authentication"
+        fi
+
+        # Build push command
+        PUSH_CMD=("$CLI_PATH" push --flag-source-url "$PUSH_TO" --manifest "$LOCAL_MANIFEST_PATH" --no-prompt)
+
+        if [ -n "$PUSH_AUTH_TOKEN" ]; then
+          PUSH_CMD+=(--auth-token "$PUSH_AUTH_TOKEN")
+          echo "::notice::Authentication token provided for push"
+        else
+          echo "::warning::No authentication token provided for push - this may fail if the remote requires authentication"
+        fi
+
+        # Execute push
+        echo "::notice::Pushing manifest to: $PUSH_TO"
+        if "${PUSH_CMD[@]}"; then
+          echo "::notice::✅ Manifest successfully pushed to remote"
+          echo "push-performed=true" >> $GITHUB_OUTPUT
+          echo "push-result=Successfully pushed to $PUSH_TO" >> $GITHUB_OUTPUT
+
+          # Add to summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Push Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
+          echo "> ✅ **Manifest successfully pushed to remote**" >> $GITHUB_STEP_SUMMARY
+          echo "> **Destination:** \`$PUSH_TO\`" >> $GITHUB_STEP_SUMMARY
+          if [ "$HAS_DIFFERENCES" = "true" ]; then
+            echo "> **Status:** Pushed with differences (sync operation)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "> **Status:** Pushed (manifests already in sync)" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "::error::Failed to push manifest to remote"
+          echo "push-performed=false" >> $GITHUB_OUTPUT
+          echo "push-result=Failed to push to $PUSH_TO" >> $GITHUB_OUTPUT
+
+          # Add failure to summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Push Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
+          echo "> ❌ **Failed to push manifest to remote**" >> $GITHUB_STEP_SUMMARY
+          echo "> **Destination:** \`$PUSH_TO\`" >> $GITHUB_STEP_SUMMARY
+          echo "> Check the logs for error details" >> $GITHUB_STEP_SUMMARY
+
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "::endgroup::"
 
     - name: Handle failure condition
       shell: bash
