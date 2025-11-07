@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.4](https://github.com/open-feature/action/compare/v0.0.3...v0.0.4) (2025-11-07)
+
+
+### ✨ New Features
+
+* improve action logging, add debug logging ([#23](https://github.com/open-feature/action/issues/23)) ([425ddba](https://github.com/open-feature/action/commit/425ddba35cc54cd554485213624686a4518f6598))
+
 ## [0.0.3](https://github.com/open-feature/action/compare/v0.0.2...v0.0.3) (2025-11-07)
 
 
