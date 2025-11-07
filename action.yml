@@ -80,54 +80,96 @@ runs:
           fi
         }
 
+        # Logging functions for better readability
+        log_info() { echo "ℹ️  $*"; }
+        log_success() { echo "::notice::✅ $*"; }
+        log_error() { echo "::error::❌ $*"; }
+        log_group() { echo "::group::📦 $*"; }
+        log_endgroup() { echo "::endgroup::"; }
+        log_debug() {
+          # Only output if GitHub Actions debug mode is enabled (RUNNER_DEBUG=1)
+          if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
+            echo "🔍 [DEBUG] $*"
+          fi
+        }
+
         pull_manifest() {
           local source_url="$1"
           local output_path="$2"
           local auth_token="$3"
           local description="$4"
-          
-          echo "::notice::Pulling $description from: $source_url"
-          
-          local pull_cmd="$CLI_PATH pull --flag-source-url \"$source_url\" --manifest \"$output_path\" --no-prompt"
-          
+
+          log_info "Pulling $description from: $source_url"
+
+          # Build command as array to prevent command injection (no eval needed)
+          local pull_cmd=(
+            "$CLI_PATH"
+            "pull"
+            "--flag-source-url"
+            "$source_url"
+            "--manifest"
+            "$output_path"
+            "--no-prompt"
+          )
+
+          # Build display command for logging (with masked token)
+          local display_cmd="$CLI_PATH pull --flag-source-url $source_url --manifest $output_path --no-prompt"
+
           if [ -n "$auth_token" ]; then
-            echo "::notice::Using authentication token for $description"
-            pull_cmd="$pull_cmd --auth-token \"$auth_token\""
+            log_info "Using authentication token for $description"
+            pull_cmd+=("--auth-token" "$auth_token")
+            display_cmd="$display_cmd --auth-token '***'"
           fi
-          
-          if ! eval $pull_cmd; then
-            echo "::error::Failed to pull $description from $source_url"
+
+          local output
+          if ! output=$("${pull_cmd[@]}" 2>&1); then
+            log_error "Failed to pull $description from $source_url"
+            log_info "Attempted command: $display_cmd"
+            log_info "CLI output:"
+            echo "$output" | sed 's/^/    /'
+            if [ -n "$auth_token" ]; then
+              log_info "💡 Tip: Auth token was provided - verify it has correct permissions"
+            else
+              log_info "💡 Tip: No auth token provided - verify the URL is publicly accessible"
+            fi
             return 1
           fi
-          
-          echo "::notice::$description downloaded to $output_path"
+
+          log_success "$description downloaded to $output_path"
         }
 
         fetch_git_manifest() {
           local target_branch="$1"
           local remote_path="$2"
           local output_path="$3"
-          
-          echo "::notice::Fetching manifest from git branch $target_branch:$remote_path"
-          
+
+          log_info "Fetching manifest from git branch $target_branch:$remote_path"
+
           # Verify the target branch exists
           if ! git rev-parse --verify "origin/$target_branch" >/dev/null 2>&1; then
             if ! git rev-parse --verify "$target_branch" >/dev/null 2>&1; then
-              echo "::error::Target branch '$target_branch' not found in local or remote repository"
+              log_error "Git branch '$target_branch' not found in repository"
+              log_info "Available branches:"
+              git branch -a | head -n 10
+              log_info ""
+              log_info "💡 Tip: Ensure fetch-depth: 0 in actions/checkout to access all branches"
               return 1
             fi
           fi
-          
+
           # Fetch manifest from target branch
           if ! git show "$target_branch:$remote_path" > "$output_path" 2>/dev/null; then
             if ! git show "origin/$target_branch:$remote_path" > "$output_path" 2>/dev/null; then
-              echo "::error::Failed to fetch manifest '$remote_path' from branch '$target_branch'"
-              echo "::error::Make sure the manifest file exists in the target branch"
+              log_error "Failed to fetch manifest '$remote_path' from branch '$target_branch'"
+              log_info "Available files in branch root:"
+              git ls-tree --name-only "$target_branch" 2>/dev/null | head -n 20 || git ls-tree --name-only "origin/$target_branch" 2>/dev/null | head -n 20
+              log_info ""
+              log_info "💡 Tip: Verify the manifest path is relative to repository root"
               return 1
             fi
           fi
-          
-          echo "::notice::Successfully fetched manifest from branch $target_branch"
+
+          log_success "Successfully fetched manifest from branch $target_branch"
         }
 
         generate_config_table() {
@@ -154,7 +196,7 @@ runs:
         }
 
         # Export functions for use in subsequent steps
-        declare -f is_url get_target_branch pull_manifest fetch_git_manifest generate_config_table > /tmp/action_functions.sh
+        declare -f is_url get_target_branch log_info log_success log_error log_group log_endgroup log_debug pull_manifest fetch_git_manifest generate_config_table > /tmp/action_functions.sh
 
         # Install CLI
         if [ "${{ inputs.cli-version }}" = "latest" ]; then
@@ -178,111 +220,214 @@ runs:
     - name: Resolve Manifests
       shell: bash
       run: |
-        echo "::group::Resolving manifests"
-
         # Source our functions
         source /tmp/action_functions.sh
 
+        log_group "Resolving local manifest: ${{ inputs.manifest }}"
+
         # Resolve local manifest
         if is_url "${{ inputs.manifest }}"; then
-          echo "::notice::Remote manifest URL detected: ${{ inputs.manifest }}"
+          log_info "Detected remote URL, downloading..."
+          log_debug "URL: ${{ inputs.manifest }}"
+          log_debug "Auth token provided: ${{ inputs.manifest-auth-token != '' && 'yes' || 'no' }}"
           LOCAL_MANIFEST_PATH="local-manifest.json"
           pull_manifest "${{ inputs.manifest }}" "$LOCAL_MANIFEST_PATH" "${{ inputs.manifest-auth-token }}" "manifest" || exit 1
         else
-          echo "::notice::Local manifest file detected: ${{ inputs.manifest }}"
+          log_info "Using local file..."
+          log_debug "File path: ${{ inputs.manifest }}"
           LOCAL_MANIFEST_PATH="${{ inputs.manifest }}"
           if [ ! -f "$LOCAL_MANIFEST_PATH" ]; then
-            echo "::error::Local manifest file '$LOCAL_MANIFEST_PATH' not found"
+            log_error "Manifest file not found: ${{ inputs.manifest }}"
+            log_info "Current working directory: $(pwd)"
+            log_info "Files in current directory:"
+            ls -la | head -n 20
+            log_info ""
+            log_info "💡 Tip: Verify the manifest path is relative to repository root"
             exit 1
           fi
+          log_success "Found manifest at $LOCAL_MANIFEST_PATH"
         fi
+
+        log_endgroup
+
+        log_group "Resolving comparison target: ${{ inputs.against }}"
 
         # Resolve against manifest
         if is_url "${{ inputs.against }}"; then
-          echo "::notice::Remote against URL detected: ${{ inputs.against }}"
+          log_info "Detected remote URL, downloading..."
+          log_debug "URL: ${{ inputs.against }}"
+          log_debug "Auth token provided: ${{ inputs.auth-token != '' && 'yes' || 'no' }}"
           pull_manifest "${{ inputs.against }}" "${{ inputs.against-manifest-path }}" "${{ inputs.auth-token }}" "against manifest" || exit 1
+          REMOTE_COMPARISON="true"
         elif [ -n "${{ inputs.against }}" ] && [ -f "${{ inputs.against }}" ]; then
           # Against is a local file - copy it to the expected location
-          echo "::notice::Local against file detected: ${{ inputs.against }}"
+          log_info "Using local file..."
+          log_debug "File path: ${{ inputs.against }}"
           cp "${{ inputs.against }}" "${{ inputs.against-manifest-path }}"
-          echo "::notice::Copied local against file to ${{ inputs.against-manifest-path }}"
+          log_success "Copied local against file to ${{ inputs.against-manifest-path }}"
+          REMOTE_COMPARISON="false"
         elif [ -n "${{ inputs.against }}" ]; then
           # Against is specified but not a URL or existing local file - treat as git path
-          echo "::notice::Git mode detected for against source"
+          log_info "Git mode: comparing different paths"
           target_branch=$(get_target_branch)
           remote_path="${{ inputs.against }}"
-          echo "::notice::Comparing different paths - Base: $remote_path, Local: ${{ inputs.manifest }}"
+          log_debug "Branch: $target_branch, Path: $remote_path"
+          log_info "Base: $remote_path on $target_branch, Local: ${{ inputs.manifest }}"
           fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}" || exit 1
+          REMOTE_COMPARISON="false"
         else
           # No against specified - use same manifest path from target branch
-          echo "::notice::Git mode detected for against source"
+          log_info "Git mode: comparing same path across branches"
           target_branch=$(get_target_branch)
           remote_path="${{ inputs.manifest }}"
-          echo "::notice::Comparing same manifest path between branches: $remote_path"
+          log_debug "Branch: $target_branch, Path: $remote_path"
+          log_info "Comparing $remote_path between current branch and $target_branch"
           fetch_git_manifest "$target_branch" "$remote_path" "${{ inputs.against-manifest-path }}" || exit 1
+          REMOTE_COMPARISON="false"
         fi
 
         # Verify against manifest exists
         if [ ! -f "${{ inputs.against-manifest-path }}" ]; then
-          echo "::error::Against manifest file not found at ${{ inputs.against-manifest-path }}"
+          log_error "Against manifest file not found at ${{ inputs.against-manifest-path }}"
           exit 1
         fi
 
-        # Detect if we're comparing to a remote URL (for correct comparison perspective)
-        if is_url "${{ inputs.against }}"; then
-          REMOTE_COMPARISON="true"
-          echo "::notice::Remote comparison mode enabled - will show changes from remote perspective"
+        # Log comparison mode
+        if [ "$REMOTE_COMPARISON" = "true" ]; then
+          log_info "🌐 Using remote comparison perspective (manifest = desired state)"
         else
-          REMOTE_COMPARISON="false"
+          log_info "📊 Using git comparison perspective (showing branch changes)"
         fi
 
         # Export paths and flags for comparison step
         echo "LOCAL_MANIFEST_PATH=$LOCAL_MANIFEST_PATH" >> $GITHUB_ENV
         echo "REMOTE_COMPARISON=$REMOTE_COMPARISON" >> $GITHUB_ENV
-        MANIFEST_SIZE=$(wc -c < "${{ inputs.against-manifest-path }}")
-        echo "::notice::Against manifest saved to ${{ inputs.against-manifest-path }} (${MANIFEST_SIZE} bytes)"
-        echo "::notice::Using local manifest at: $LOCAL_MANIFEST_PATH"
-        echo "::endgroup::"
+        LOCAL_SIZE=$(wc -c < "$LOCAL_MANIFEST_PATH")
+        AGAINST_SIZE=$(wc -c < "${{ inputs.against-manifest-path }}")
+        log_success "Manifests resolved (local: ${LOCAL_SIZE} bytes, against: ${AGAINST_SIZE} bytes)"
+
+        log_debug "Local manifest path: $LOCAL_MANIFEST_PATH"
+        log_debug "Against manifest path: ${{ inputs.against-manifest-path }}"
+        log_debug "Comparison mode: $([ "$REMOTE_COMPARISON" = "true" ] && echo "remote" || echo "git")"
+
+        log_endgroup
 
     - name: Compare manifests
       id: compare
       shell: bash
       run: |
-        echo "::group::Comparing manifests"
+        # Source our functions
+        source /tmp/action_functions.sh
+
+        # ============================================================================
+        # COMPARISON MODE: Determine perspective and parameters
+        # ============================================================================
+        # Git mode: Show "what changed in this branch"
+        #   - additions = flags added in PR
+        #   - removals = flags removed in PR
+        #
+        # Remote mode: Show "what will change in remote when pushed" (manifest = desired state)
+        #   - We swap CLI parameters so remote is the reference
+        #   - Then use swapped section names so output shows push impact
+        # ============================================================================
+
+        if [ "$REMOTE_COMPARISON" = "true" ]; then
+          log_group "Running comparison in remote mode"
+
+          # Remote comparison: swap parameters to compare remote vs local
+          # This makes remote the "old" state and local the "new" desired state
+          MANIFEST_PARAM="${{ inputs.against-manifest-path }}"
+          # Swap parameters: AGAINST_PARAM is set to local manifest so comparison shows what will change in remote.
+          AGAINST_PARAM="$LOCAL_MANIFEST_PATH"
+
+          # Section mappings (for parsing output with correct perspective)
+          # CLI's "additions" (in remote, not in local) = will be REMOVED from remote
+          # CLI's "removals" (in local, not in remote) = will be ADDED to remote
+          ADD_SECTION="removals"
+          REMOVE_SECTION="additions"
+
+          # User-facing descriptions
+          ADD_DESC="Flags that will be added to remote"
+          REMOVE_DESC="Flags that will be removed from remote"
+          MODIFY_DESC="Flags that will be modified in remote"
+
+          log_info "Perspective: What will change in remote when pushed"
+          log_info "Command: compare --manifest <remote> --against <local>"
+        else
+          log_group "Running comparison in git mode"
+
+          # Git comparison: normal parameter order
+          MANIFEST_PARAM="$LOCAL_MANIFEST_PATH"
+          AGAINST_PARAM="${{ inputs.against-manifest-path }}"
+
+          # Normal section mappings
+          ADD_SECTION="additions"
+          REMOVE_SECTION="removals"
+
+          # User-facing descriptions
+          ADD_DESC="Flags added in this branch"
+          REMOVE_DESC="Flags removed in this branch"
+          MODIFY_DESC="Flags modified in this branch"
+
+          log_info "Perspective: What changed in current branch"
+          log_info "Command: compare --manifest <local> --against <base>"
+        fi
 
         # Create output directory
         mkdir -p comparison-output
 
-        # Determine comparison parameters based on mode
-        # For remote comparisons, we swap the parameters so the output shows
-        # "what will change in the remote" rather than "what's different in local"
-        if [ "$REMOTE_COMPARISON" = "true" ]; then
-          echo "::notice::Using remote comparison perspective (showing changes that will be applied to remote)"
-          MANIFEST_PARAM="${{ inputs.against-manifest-path }}"
-          # Swap parameters: AGAINST_PARAM is set to local manifest so comparison shows what will change in remote.
-          AGAINST_PARAM="$LOCAL_MANIFEST_PATH"
-        else
-          echo "::notice::Using git comparison perspective (showing changes in current branch)"
-          MANIFEST_PARAM="$LOCAL_MANIFEST_PATH"
-          AGAINST_PARAM="${{ inputs.against-manifest-path }}"
+        # Debug: Show manifest contents
+        if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
+          log_debug "=== MANIFEST CONTENTS ==="
+          log_debug "Local manifest ($LOCAL_MANIFEST_PATH):"
+          cat "$LOCAL_MANIFEST_PATH" | head -n 50
+          log_debug ""
+          log_debug "Against manifest (${{ inputs.against-manifest-path }}):"
+          cat "${{ inputs.against-manifest-path }}" | head -n 50
+          log_debug ""
+          log_debug "=== END MANIFEST CONTENTS ==="
         fi
 
         # Run comparison
+        log_info "Executing OpenFeature CLI compare..."
+
+        # Debug: Show exact command
+        log_debug "Exact command being executed:"
+        log_debug "$CLI_PATH compare --manifest \"$MANIFEST_PARAM\" --against \"$AGAINST_PARAM\" --output yaml"
+
         set +e
         COMPARE_OUTPUT=$($CLI_PATH compare --manifest "$MANIFEST_PARAM" --against "$AGAINST_PARAM" --output yaml 2>&1)
         COMPARE_EXIT_CODE=$?
         set -e
 
+        log_debug "CLI exit code: $COMPARE_EXIT_CODE"
+
         # Save raw output
         echo "$COMPARE_OUTPUT" > comparison-output/raw-output.txt
+
+        # Debug: Show raw CLI output
+        if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
+          log_debug "=== RAW CLI OUTPUT ==="
+          echo "$COMPARE_OUTPUT" | head -n 100
+          log_debug "=== END RAW CLI OUTPUT ==="
+        fi
 
         # Determine differences
         HAS_DIFFERENCES="false"
         if echo "$COMPARE_OUTPUT" | grep -q "No differences found between the manifests"; then
           HAS_DIFFERENCES="false"
+          log_success "No differences found"
         elif [ -n "$COMPARE_OUTPUT" ]; then
           HAS_DIFFERENCES="true"
+          log_info "Differences detected"
         fi
+
+        # Export section mappings for next step
+        echo "ADD_SECTION=$ADD_SECTION" >> $GITHUB_ENV
+        echo "REMOVE_SECTION=$REMOVE_SECTION" >> $GITHUB_ENV
+        echo "ADD_DESC=$ADD_DESC" >> $GITHUB_ENV
+        echo "REMOVE_DESC=$REMOVE_DESC" >> $GITHUB_ENV
+        echo "MODIFY_DESC=$MODIFY_DESC" >> $GITHUB_ENV
 
         # Set outputs
         echo "has-differences=$HAS_DIFFERENCES" >> $GITHUB_OUTPUT
@@ -294,26 +439,25 @@ runs:
 
         # Generate summary
         if [ "$HAS_DIFFERENCES" = "true" ]; then
-          SUMMARY="🔍 Flag manifest differences detected between local and against sources"
-          echo "::warning::Differences found between local and against manifests"
+          SUMMARY="🔍 Flag manifest differences detected"
+          echo "::warning::Differences found between manifests"
         else
-          SUMMARY="✅ No differences found between local and against flag manifests"
-          echo "::notice::Manifests are in sync"
+          SUMMARY="✅ No differences found between manifests"
         fi
 
         echo "summary<<EOF" >> $GITHUB_OUTPUT
         echo "$SUMMARY" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
 
-        echo "::endgroup::"
+        log_endgroup
 
     - name: Generate Summary
       shell: bash
       run: |
-        echo "::group::Generating summary"
-
         # Source our functions
         source /tmp/action_functions.sh
+
+        log_group "Generating summary"
 
         # Determine comparison type
         if is_url "${{ inputs.against }}"; then
@@ -349,22 +493,14 @@ runs:
           # Parse YAML and generate change summary
           if [ -f "comparison-output/raw-output.txt" ]; then
             RAW_YAML=$(cat comparison-output/raw-output.txt)
-            
-            # Count changes
-            RAW_ADD_COUNT=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep -c "^    - type:" || true)
-            RAW_REMOVE_COUNT=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep -c "^    - type:" || true)
-            MODIFY_COUNT=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep -c "^    - type:" || true)
 
-            # For remote comparisons, we swapped the CLI parameters, so we need to swap the interpretation:
-            # CLI's "additions" (flags present in remote but not in local) = these will be removed from remote to match local
-            # CLI's "removals" (flags present in local but not in remote) = these will be added to remote to match local
-            if [ "$REMOTE_COMPARISON" = "true" ]; then
-              ADD_COUNT=$RAW_REMOVE_COUNT
-              REMOVE_COUNT=$RAW_ADD_COUNT
-            else
-              ADD_COUNT=$RAW_ADD_COUNT
-              REMOVE_COUNT=$RAW_REMOVE_COUNT
-            fi
+            # Count changes using yq (robust YAML parsing)
+            # Use section mappings from previous step (already swapped for remote mode)
+            ADD_COUNT=$(echo "$RAW_YAML" | yq e ".$ADD_SECTION | length // 0" -)
+            REMOVE_COUNT=$(echo "$RAW_YAML" | yq e ".$REMOVE_SECTION | length // 0" -)
+            MODIFY_COUNT=$(echo "$RAW_YAML" | yq e '.modifications | length // 0' -)
+
+            log_info "Parsed changes: $ADD_COUNT additions, $REMOVE_COUNT removals, $MODIFY_COUNT modifications"
 
             # Export for PR comments
             echo "ADD_COUNT=$ADD_COUNT" >> $GITHUB_ENV
@@ -372,25 +508,18 @@ runs:
             echo "MODIFY_COUNT=$MODIFY_COUNT" >> $GITHUB_ENV
             echo "TOTAL_CHANGES=$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))" >> $GITHUB_ENV
 
-            # Set up mode-specific text and YAML section mappings
+            # Get mode-specific descriptions from environment (set in Compare step)
+            # These already account for the correct perspective (git vs remote)
+
+            # Set titles for sections
             if [ "$REMOTE_COMPARISON" = "true" ]; then
-              ADD_DESC="Flags that will be added to remote"
-              REMOVE_DESC="Flags that will be removed from remote"
-              MODIFY_DESC="Flags that will be modified in remote"
               ADD_TITLE="Flags That Will Be Added"
               REMOVE_TITLE="Flags That Will Be Removed"
               MODIFY_TITLE="Flags That Will Be Modified"
-              ADD_SECTION="removals"
-              REMOVE_SECTION="additions"
             else
-              ADD_DESC="Flags added in this branch"
-              REMOVE_DESC="Flags removed in this branch"
-              MODIFY_DESC="Flags modified in this branch"
               ADD_TITLE="Flags Added"
               REMOVE_TITLE="Flags Removed"
               MODIFY_TITLE="Flags Modified"
-              ADD_SECTION="additions"
-              REMOVE_SECTION="removals"
             fi
 
             # Summary table
@@ -404,22 +533,21 @@ runs:
             echo "| **Total Changes** | **$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))** | Overall differences detected |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
-            # Build change details for PR comment
-            # Note: For remote comparisons, we use swapped YAML sections (ADD_SECTION/REMOVE_SECTION)
+            # Build change details for PR comment using yq (robust parsing)
             CHANGE_DETAILS=""
             if [ $ADD_COUNT -gt 0 ]; then
               CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 $ADD_TITLE ($ADD_COUNT)\n"
-              ADD_LIST=$(echo "$RAW_YAML" | sed -n "/^${ADD_SECTION}:/,/^[a-z]/p" | grep "^      path:" | sed 's/^      path: flags\./- 🟢 `/' | sed 's/$/`/')
+              ADD_LIST=$(echo "$RAW_YAML" | yq e ".$ADD_SECTION[].path" - | sed 's|^flags\.||' | sed 's|^|🟢 `|' | sed 's|$|`|')
               CHANGE_DETAILS="${CHANGE_DETAILS}${ADD_LIST}\n\n"
             fi
             if [ $REMOVE_COUNT -gt 0 ]; then
               CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 $REMOVE_TITLE ($REMOVE_COUNT)\n"
-              REMOVE_LIST=$(echo "$RAW_YAML" | sed -n "/^${REMOVE_SECTION}:/,/^[a-z]/p" | grep "^      path:" | sed 's/^      path: flags\./- 🔴 `/' | sed 's/$/`/')
+              REMOVE_LIST=$(echo "$RAW_YAML" | yq e ".$REMOVE_SECTION[].path" - | sed 's|^flags\.||' | sed 's|^|🔴 `|' | sed 's|$|`|')
               CHANGE_DETAILS="${CHANGE_DETAILS}${REMOVE_LIST}\n\n"
             fi
             if [ $MODIFY_COUNT -gt 0 ]; then
               CHANGE_DETAILS="${CHANGE_DETAILS}### 🟡 $MODIFY_TITLE ($MODIFY_COUNT)\n"
-              MODIFY_LIST=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟡 `/' | sed 's/$/`/')
+              MODIFY_LIST=$(echo "$RAW_YAML" | yq e '.modifications[].path' - | sed 's|^flags\.||' | sed 's|^|🟡 `|' | sed 's|$|`|')
               CHANGE_DETAILS="${CHANGE_DETAILS}${MODIFY_LIST}\n"
             fi
             
@@ -513,7 +641,8 @@ runs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "*Generated by [OpenFeature Manifest Compare Action](https://github.com/openfeature/action)*" >> $GITHUB_STEP_SUMMARY
 
-        echo "::endgroup::"
+        log_success "Summary generated successfully"
+        log_endgroup
 
     - name: Post PR comment
       if: |
