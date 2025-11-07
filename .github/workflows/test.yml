@@ -598,6 +598,7 @@ jobs:
               "newFlagAddedLocally": {
                 "flagType": "boolean",
                 "defaultValue": true
+              }
             }
           }
           EOF
