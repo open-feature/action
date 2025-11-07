@@ -259,6 +259,7 @@ runs:
         if [ "$REMOTE_COMPARISON" = "true" ]; then
           echo "::notice::Using remote comparison perspective (showing changes that will be applied to remote)"
           MANIFEST_PARAM="${{ inputs.against-manifest-path }}"
+          # Swap parameters: AGAINST_PARAM is set to local manifest so comparison shows what will change in remote.
           AGAINST_PARAM="$LOCAL_MANIFEST_PATH"
         else
           echo "::notice::Using git comparison perspective (showing changes in current branch)"
