@@ -355,9 +355,9 @@ runs:
             RAW_REMOVE_COUNT=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep -c "^    - type:" || true)
             MODIFY_COUNT=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep -c "^    - type:" || true)
 
-            # For remote comparisons, we swapped the CLI parameters, so we need to swap the interpretation
-            # CLI's "additions" (in remote, not in local) = will be removed from remote
-            # CLI's "removals" (in local, not in remote) = will be added to remote
+            # For remote comparisons, we swapped the CLI parameters, so we need to swap the interpretation:
+            # CLI's "additions" (flags present in remote but not in local) = these will be removed from remote to match local
+            # CLI's "removals" (flags present in local but not in remote) = these will be added to remote to match local
             if [ "$REMOTE_COMPARISON" = "true" ]; then
               ADD_COUNT=$RAW_REMOVE_COUNT
               REMOVE_COUNT=$RAW_ADD_COUNT
