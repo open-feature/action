@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.3](https://github.com/open-feature/action/compare/v0.0.2...v0.0.3) (2025-11-07)
+
+
+### 🐛 Bug Fixes
+
+* correct remote comparision perspective ([618df4c](https://github.com/open-feature/action/commit/618df4c9bf5b21faf2ed9706b4033dafa0ea6e42))
+* correct remote comparison perspective ([b03dae1](https://github.com/open-feature/action/commit/b03dae135051fc64b173b9f125fbf993e7de5a0e))
+
 ## [0.0.2](https://github.com/open-feature/action/compare/v0.0.1...v0.0.2) (2025-11-05)
 
 
