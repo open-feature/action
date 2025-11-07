@@ -81,15 +81,15 @@ runs:
         }
 
         # Logging functions for better readability
-        log_info() { echo "$*"; }
-        log_success() { echo "✅ $*"; }
+        log_info() { echo "ℹ️  $*"; }
+        log_success() { echo "::notice::✅ $*"; }
         log_error() { echo "::error::❌ $*"; }
-        log_group() { echo "::group:📁 $*"; }
+        log_group() { echo "::group::📦 $*"; }
         log_endgroup() { echo "::endgroup::"; }
         log_debug() {
           # Only output if GitHub Actions debug mode is enabled (RUNNER_DEBUG=1)
           if [ "${RUNNER_DEBUG:-0}" = "1" ]; then
-            echo "[DEBUG] $*"
+            echo "🔍 [DEBUG] $*"
           fi
         }
 
@@ -101,17 +101,30 @@ runs:
 
           log_info "Pulling $description from: $source_url"
 
-          local pull_cmd="$CLI_PATH pull --flag-source-url \"$source_url\" --manifest \"$output_path\" --no-prompt"
+          # Build command as array to prevent command injection (no eval needed)
+          local pull_cmd=(
+            "$CLI_PATH"
+            "pull"
+            "--flag-source-url"
+            "$source_url"
+            "--manifest"
+            "$output_path"
+            "--no-prompt"
+          )
+
+          # Build display command for logging (with masked token)
+          local display_cmd="$CLI_PATH pull --flag-source-url $source_url --manifest $output_path --no-prompt"
 
           if [ -n "$auth_token" ]; then
             log_info "Using authentication token for $description"
-            pull_cmd="$pull_cmd --auth-token \"$auth_token\""
+            pull_cmd+=("--auth-token" "$auth_token")
+            display_cmd="$display_cmd --auth-token '***'"
           fi
 
           local output
-          if ! output=$(eval $pull_cmd 2>&1); then
+          if ! output=$("${pull_cmd[@]}" 2>&1); then
             log_error "Failed to pull $description from $source_url"
-            log_info "Attempted command: $CLI_PATH pull --flag-source-url $source_url --manifest $output_path"
+            log_info "Attempted command: $display_cmd"
             log_info "CLI output:"
             echo "$output" | sed 's/^/    /'
             if [ -n "$auth_token" ]; then
