@@ -19,7 +19,9 @@ openfeature.exe
 # Action test artifacts
 comparison-output/
 upstream-*.yml
+# test-*.yml  # Commented out to allow test workflows in .github/workflows/
 test-*.yml
+!.github/workflows/test-*.yml  # Allow test workflows in the workflows directory
 *.test
 
 # IDE files

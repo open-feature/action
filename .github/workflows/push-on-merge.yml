@@ -1,0 +1,157 @@
+name: Auto-Push Flags on Merge
+
+# This is a reusable workflow that automatically pushes flag manifest changes
+# to a remote provider when PRs are merged to the default branch
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        description: 'Path to the flag manifest file'
+        required: false
+        default: 'flags.json'
+        type: string
+      remote-url:
+        description: 'Remote provider URL to push flags to'
+        required: true
+        type: string
+      branch:
+        description: 'Branch to trigger push on (defaults to default branch)'
+        required: false
+        default: ${{ github.event.repository.default_branch }}
+        type: string
+      cli-version:
+        description: 'OpenFeature CLI version to use'
+        required: false
+        default: 'latest'
+        type: string
+      dry-run:
+        description: 'Perform a dry run without actually pushing'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      auth-token:
+        description: 'Authentication token for the remote provider'
+        required: true
+
+jobs:
+  push-flags:
+    name: Push Flag Changes
+    runs-on: ubuntu-latest
+    # Only run on the specified branch and when manifest files change
+    if: |
+      github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', inputs.branch || github.event.repository.default_branch)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need previous commit to check for changes
+
+      - name: Check if manifest changed
+        id: check-changes
+        run: |
+          echo "::group::Checking for manifest changes"
+
+          MANIFEST_PATH="${{ inputs.manifest-path }}"
+
+          # Check if the manifest file was modified in this commit
+          if git diff --name-only HEAD~1 HEAD | grep -q "^${MANIFEST_PATH}$"; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "::notice::Manifest file was modified in this commit"
+
+            # Show what changed
+            echo "::group::Changes in ${MANIFEST_PATH}"
+            git diff HEAD~1 HEAD -- "${MANIFEST_PATH}"
+            echo "::endgroup::"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "::notice::No changes to manifest file in this commit"
+          fi
+
+          echo "::endgroup::"
+
+      - name: Setup push action
+        if: steps.check-changes.outputs.changed == 'true'
+        uses: open-feature/action@main
+        id: push-action
+        with:
+          manifest: ${{ inputs.manifest-path }}
+          against: ${{ inputs.remote-url }}
+          auth-token: ${{ secrets.auth-token }}
+          cli-version: ${{ inputs.cli-version }}
+          push-enabled: ${{ !inputs.dry-run }}
+          push-to: ${{ inputs.remote-url }}
+          push-only-on-sync: 'false'  # Allow pushing changes
+
+      - name: Dry run notification
+        if: steps.check-changes.outputs.changed == 'true' && inputs.dry-run
+        run: |
+          echo "::warning::DRY RUN MODE - No actual push was performed"
+          echo "The following changes would have been pushed:"
+          echo "${{ steps.push-action.outputs.summary }}"
+
+      - name: Create deployment annotation
+        if: |
+          steps.check-changes.outputs.changed == 'true' &&
+          steps.push-action.outputs.push-performed == 'true' &&
+          !inputs.dry-run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Create a deployment to track the flag push
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              task: 'push-flags',
+              auto_merge: false,
+              required_contexts: [],
+              environment: 'flag-provider',
+              description: 'Pushed flag manifest to remote provider',
+              payload: {
+                manifest: '${{ inputs.manifest-path }}',
+                remote: '${{ inputs.remote-url }}',
+                pushed_at: new Date().toISOString()
+              }
+            });
+
+            // Mark deployment as successful
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'success',
+              description: 'Flag manifest successfully pushed',
+              environment_url: '${{ inputs.remote-url }}'
+            });
+
+            console.log('Deployment created:', deployment.data.id);
+
+      - name: Summary
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          echo "## 🚀 Auto-Push Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.push-action.outputs.push-performed }}" == "true" ]; then
+            echo "✅ **Flag manifest successfully pushed to remote provider**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Manifest:** \`${{ inputs.manifest-path }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Remote:** \`${{ inputs.remote-url }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Author:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Message:** ${{ github.event.head_commit.message }}" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ inputs.dry-run }}" == "true" ]; then
+            echo "🔍 **Dry Run Mode - No push performed**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The following would have been pushed:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Manifest:** \`${{ inputs.manifest-path }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Remote:** \`${{ inputs.remote-url }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **Push was not performed**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Result: ${{ steps.push-action.outputs.push-result }}" >> $GITHUB_STEP_SUMMARY
+          fi

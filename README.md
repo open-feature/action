@@ -111,6 +111,8 @@ See the [Contributing](#contributing) section for development setup.
 
 - 🔍 **Manifest Comparison** - Compare local flag manifests against remote sources OR git branches
 - 🌿 **Git Branch Comparison** - Automatically compare against PR base branches with minimal configuration
+- 🚀 **Push to Remote** - Sync local flag changes to remote providers after comparison
+- 🔄 **Auto-Push on Merge** - Automatically push flag changes when PRs are merged (reusable workflow included)
 - 🔗 **Smart Mode Detection** - Automatically detects URL vs git mode based on input format
 - 🔐 **Authentication Support** - Secure access to protected flag sources using tokens
 - 📊 **Rich GitHub Integration** - Detailed summaries with change breakdowns in GitHub Action results
@@ -191,6 +193,10 @@ jobs:
 | `against-manifest-path` | Path where the fetched manifest from the against source will be saved locally | No | `against-flags.json` |
 | `strict` | Strict mode - fail the action if differences are found | No | `false` |
 | `post-pr-comment` | Post a comment on the PR when differences are detected | No | `true` |
+| `push-enabled` | Enable push to remote source after comparison | No | `false` |
+| `push-to` | URL to push to (defaults to `against` URL if not specified) | No | - |
+| `push-auth-token` | Auth token for pushing (defaults to `auth-token` if not specified) | No | - |
+| `push-only-on-sync` | Only push if manifests are already in sync (safety feature) | No | `false` |
 
 ### Mode Detection
 
@@ -214,6 +220,8 @@ The action automatically detects the comparison mode based on the `against` inpu
 | `against-manifest-path` | File path where the against manifest was saved |
 | `local-manifest-path` | File path of the local manifest (original path or downloaded from URL) |
 | `summary` | Human-readable summary of the comparison result |
+| `push-performed` | Whether push was performed (`"true"`/`"false"`) |
+| `push-result` | Result message from push operation |
 
 ## Usage Examples
 
@@ -290,6 +298,52 @@ The action automatically detects the comparison mode based on the `against` inpu
     curl -X POST -H 'Content-type: application/json' \
       --data '{"text":"🚨 Flag drift detected: ${{ steps.compare.outputs.summary }}"}' \
       ${{ secrets.SLACK_WEBHOOK }}
+```
+
+#### Push to Remote Provider
+
+```yaml
+- name: Sync flags to provider
+  uses: open-feature/action@v1
+  with:
+    manifest: "flags.json"
+    against: "https://api.flagprovider.com/flags"
+    auth-token: ${{ secrets.FLAG_TOKEN }}
+    push-enabled: true
+```
+
+#### Auto-Push on Merge (Reusable Workflow)
+
+```yaml
+# .github/workflows/auto-push-flags.yml
+name: Auto-Push Flags
+
+on:
+  push:
+    branches: [main]
+    paths: ['flags.json']
+
+jobs:
+  push-to-provider:
+    uses: open-feature/action/.github/workflows/push-on-merge.yml@main
+    with:
+      manifest-path: 'flags.json'
+      remote-url: 'https://flagd-studio.onrender.com/api'
+    secrets:
+      auth-token: ${{ secrets.FLAGD_STUDIO_TOKEN }}
+```
+
+#### Conditional Push Based on Sync Status
+
+```yaml
+- name: Push only if in sync
+  uses: open-feature/action@v1
+  with:
+    manifest: "flags.json"
+    against: "https://api.flagprovider.com/flags"
+    auth-token: ${{ secrets.FLAG_TOKEN }}
+    push-enabled: true
+    push-only-on-sync: true  # Safety: only push if already synchronized
 ```
 
 #### Multi-Environment Validation
