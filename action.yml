@@ -228,8 +228,17 @@ runs:
           exit 1
         fi
 
-        # Export paths for comparison step
+        # Detect if we're comparing to a remote URL (for correct comparison perspective)
+        if is_url "${{ inputs.against }}"; then
+          REMOTE_COMPARISON="true"
+          echo "::notice::Remote comparison mode enabled - will show changes from remote perspective"
+        else
+          REMOTE_COMPARISON="false"
+        fi
+
+        # Export paths and flags for comparison step
         echo "LOCAL_MANIFEST_PATH=$LOCAL_MANIFEST_PATH" >> $GITHUB_ENV
+        echo "REMOTE_COMPARISON=$REMOTE_COMPARISON" >> $GITHUB_ENV
         MANIFEST_SIZE=$(wc -c < "${{ inputs.against-manifest-path }}")
         echo "::notice::Against manifest saved to ${{ inputs.against-manifest-path }} (${MANIFEST_SIZE} bytes)"
         echo "::notice::Using local manifest at: $LOCAL_MANIFEST_PATH"
@@ -244,9 +253,23 @@ runs:
         # Create output directory
         mkdir -p comparison-output
 
+        # Determine comparison parameters based on mode
+        # For remote comparisons, we swap the parameters so the output shows
+        # "what will change in the remote" rather than "what's different in local"
+        if [ "$REMOTE_COMPARISON" = "true" ]; then
+          echo "::notice::Using remote comparison perspective (showing changes that will be applied to remote)"
+          MANIFEST_PARAM="${{ inputs.against-manifest-path }}"
+          # Swap parameters: AGAINST_PARAM is set to local manifest so comparison shows what will change in remote.
+          AGAINST_PARAM="$LOCAL_MANIFEST_PATH"
+        else
+          echo "::notice::Using git comparison perspective (showing changes in current branch)"
+          MANIFEST_PARAM="$LOCAL_MANIFEST_PATH"
+          AGAINST_PARAM="${{ inputs.against-manifest-path }}"
+        fi
+
         # Run comparison
         set +e
-        COMPARE_OUTPUT=$($CLI_PATH compare --manifest "$LOCAL_MANIFEST_PATH" --against "${{ inputs.against-manifest-path }}" --output yaml 2>&1)
+        COMPARE_OUTPUT=$($CLI_PATH compare --manifest "$MANIFEST_PARAM" --against "$AGAINST_PARAM" --output yaml 2>&1)
         COMPARE_EXIT_CODE=$?
         set -e
 
@@ -294,8 +317,8 @@ runs:
 
         # Determine comparison type
         if is_url "${{ inputs.against }}"; then
-          COMPARISON_TITLE="## 🌐 Upstream Provider Comparison"
-          COMPARISON_SUBTITLE="Comparing local manifest against remote source"
+          COMPARISON_TITLE="## 🌐 Remote Push Preview"
+          COMPARISON_SUBTITLE="Showing what will change in the remote flag service when changes are pushed"
           IS_REMOTE_URL="true"
         else
           target_branch=$(get_target_branch)
@@ -315,8 +338,8 @@ runs:
           # Status banner
           echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
           if [ "$IS_REMOTE_URL" = "true" ]; then
-            echo "> **Out of Sync** - Your local manifest differs from the upstream provider" >> $GITHUB_STEP_SUMMARY
-            echo "> **Source:** \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "> **Changes Will Be Applied** - The following changes will be made to the remote flag service when pushed" >> $GITHUB_STEP_SUMMARY
+            echo "> **Remote Source:** \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
           else
             target_branch=$(get_target_branch)
             echo "> **Changes Detected** - This branch modifies the flag manifest compared to $target_branch" >> $GITHUB_STEP_SUMMARY
@@ -328,41 +351,74 @@ runs:
             RAW_YAML=$(cat comparison-output/raw-output.txt)
             
             # Count changes
-            ADD_COUNT=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep -c "^    - type:" || true)
-            REMOVE_COUNT=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep -c "^    - type:" || true)
+            RAW_ADD_COUNT=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep -c "^    - type:" || true)
+            RAW_REMOVE_COUNT=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep -c "^    - type:" || true)
             MODIFY_COUNT=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep -c "^    - type:" || true)
-            
+
+            # For remote comparisons, we swapped the CLI parameters, so we need to swap the interpretation:
+            # CLI's "additions" (flags present in remote but not in local) = these will be removed from remote to match local
+            # CLI's "removals" (flags present in local but not in remote) = these will be added to remote to match local
+            if [ "$REMOTE_COMPARISON" = "true" ]; then
+              ADD_COUNT=$RAW_REMOVE_COUNT
+              REMOVE_COUNT=$RAW_ADD_COUNT
+            else
+              ADD_COUNT=$RAW_ADD_COUNT
+              REMOVE_COUNT=$RAW_REMOVE_COUNT
+            fi
+
             # Export for PR comments
             echo "ADD_COUNT=$ADD_COUNT" >> $GITHUB_ENV
             echo "REMOVE_COUNT=$REMOVE_COUNT" >> $GITHUB_ENV
             echo "MODIFY_COUNT=$MODIFY_COUNT" >> $GITHUB_ENV
             echo "TOTAL_CHANGES=$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))" >> $GITHUB_ENV
-            
+
+            # Set up mode-specific text and YAML section mappings
+            if [ "$REMOTE_COMPARISON" = "true" ]; then
+              ADD_DESC="Flags that will be added to remote"
+              REMOVE_DESC="Flags that will be removed from remote"
+              MODIFY_DESC="Flags that will be modified in remote"
+              ADD_TITLE="Flags That Will Be Added"
+              REMOVE_TITLE="Flags That Will Be Removed"
+              MODIFY_TITLE="Flags That Will Be Modified"
+              ADD_SECTION="removals"
+              REMOVE_SECTION="additions"
+            else
+              ADD_DESC="Flags added in this branch"
+              REMOVE_DESC="Flags removed in this branch"
+              MODIFY_DESC="Flags modified in this branch"
+              ADD_TITLE="Flags Added"
+              REMOVE_TITLE="Flags Removed"
+              MODIFY_TITLE="Flags Modified"
+              ADD_SECTION="additions"
+              REMOVE_SECTION="removals"
+            fi
+
             # Summary table
             echo "## 📊 Change Summary" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Change Type | Count | Description |" >> $GITHUB_STEP_SUMMARY
             echo "|-------------|-------|-------------|" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟢 **Additions** | **$ADD_COUNT** | New flags in against source |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🔴 **Removals** | **$REMOVE_COUNT** | Flags removed from local manifest |" >> $GITHUB_STEP_SUMMARY
-            echo "| 🟡 **Modifications** | **$MODIFY_COUNT** | Flags with changed configurations |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟢 **Additions** | **$ADD_COUNT** | $ADD_DESC |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 **Removals** | **$REMOVE_COUNT** | $REMOVE_DESC |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 **Modifications** | **$MODIFY_COUNT** | $MODIFY_DESC |" >> $GITHUB_STEP_SUMMARY
             echo "| **Total Changes** | **$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))** | Overall differences detected |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            
+
             # Build change details for PR comment
+            # Note: For remote comparisons, we use swapped YAML sections (ADD_SECTION/REMOVE_SECTION)
             CHANGE_DETAILS=""
             if [ $ADD_COUNT -gt 0 ]; then
-              CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 New Flags Added ($ADD_COUNT)\n"
-              ADD_LIST=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟢 `/' | sed 's/$/`/')
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 $ADD_TITLE ($ADD_COUNT)\n"
+              ADD_LIST=$(echo "$RAW_YAML" | sed -n "/^${ADD_SECTION}:/,/^[a-z]/p" | grep "^      path:" | sed 's/^      path: flags\./- 🟢 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${ADD_LIST}\n\n"
             fi
             if [ $REMOVE_COUNT -gt 0 ]; then
-              CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 Flags Removed ($REMOVE_COUNT)\n"
-              REMOVE_LIST=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🔴 `/' | sed 's/$/`/')
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 $REMOVE_TITLE ($REMOVE_COUNT)\n"
+              REMOVE_LIST=$(echo "$RAW_YAML" | sed -n "/^${REMOVE_SECTION}:/,/^[a-z]/p" | grep "^      path:" | sed 's/^      path: flags\./- 🔴 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${REMOVE_LIST}\n\n"
             fi
             if [ $MODIFY_COUNT -gt 0 ]; then
-              CHANGE_DETAILS="${CHANGE_DETAILS}### 🟡 Flags Modified ($MODIFY_COUNT)\n"
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🟡 $MODIFY_TITLE ($MODIFY_COUNT)\n"
               MODIFY_LIST=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟡 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${MODIFY_LIST}\n"
             fi
@@ -417,7 +473,7 @@ runs:
           # Success case
           echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
           if [ "$IS_REMOTE_URL" = "true" ]; then
-            echo "> ✅ **In Sync** - Your local manifest matches the upstream provider" >> $GITHUB_STEP_SUMMARY
+            echo "> ✅ **In Sync** - Your local manifest matches the remote flag service" >> $GITHUB_STEP_SUMMARY
             echo "> **Source:** \`${{ inputs.against }}\`" >> $GITHUB_STEP_SUMMARY
           else
             target_branch=$(get_target_branch)
@@ -426,9 +482,9 @@ runs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 🎉 Status" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "$IS_REMOTE_URL" = "true" ]; then
-            echo "Your local manifest is synchronized with the upstream provider. No drift detected! 🚀" >> $GITHUB_STEP_SUMMARY
+            echo "Your local manifest matches the remote flag service. No changes will be applied when pushed. 🚀" >> $GITHUB_STEP_SUMMARY
           else
             target_branch=$(get_target_branch)
             echo "No flag configuration changes in this branch compared to $target_branch. 🚀" >> $GITHUB_STEP_SUMMARY
@@ -450,7 +506,7 @@ runs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "---" >> $GITHUB_STEP_SUMMARY
         if [ "$IS_REMOTE_URL" = "true" ]; then
-          echo "*💡 This comparison helps detect drift between your local configuration and upstream provider*" >> $GITHUB_STEP_SUMMARY
+          echo "*💡 This preview shows what will change in the remote flag service when you push your local manifest*" >> $GITHUB_STEP_SUMMARY
         else
           echo "*💡 This comparison shows changes introduced in your branch compared to the target branch*" >> $GITHUB_STEP_SUMMARY
         fi
@@ -471,18 +527,18 @@ runs:
           ## 🚀 OpenFeature Manifest Comparison (${{ github.job }})
 
           > [!WARNING]
-          ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 
-              format('> **Out of Sync with Upstream** - Your local manifest (`{0}`) differs from the remote source (`{1}`)', inputs.manifest, inputs.against) || 
-              format('> **Git Changes Detected** - Your feature flag manifest has changes compared to the {0} branch', 
+          ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) &&
+              format('> **Remote Push Preview** - The following changes will be applied to the remote flag service (`{0}`) when your manifest is pushed', inputs.against) ||
+              format('> **Git Changes Detected** - Your feature flag manifest has changes compared to the {0} branch',
                      github.base_ref || inputs.base-branch || 'main') }}
 
           ### 📊 Change Summary
 
           | Change Type | Count | Description |
           |-------------|-------|-------------|
-          | 🟢 **Additions** | **${{ env.ADD_COUNT }}** | New flags added |
-          | 🔴 **Removals** | **${{ env.REMOVE_COUNT }}** | Flags removed |
-          | 🟡 **Modifications** | **${{ env.MODIFY_COUNT }}** | Flags modified |
+          | 🟢 **Additions** | **${{ env.ADD_COUNT }}** | ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 'Flags that will be added to remote' || 'Flags added in this branch' }} |
+          | 🔴 **Removals** | **${{ env.REMOVE_COUNT }}** | ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 'Flags that will be removed from remote' || 'Flags removed in this branch' }} |
+          | 🟡 **Modifications** | **${{ env.MODIFY_COUNT }}** | ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 'Flags that will be modified in remote' || 'Flags modified in this branch' }} |
           | **Total** | **${{ env.TOTAL_CHANGES }}** | Total differences |
 
           <details>
@@ -502,8 +558,8 @@ runs:
           </details>
 
           ---
-          ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 
-              '*⚠️ Consider syncing with your upstream flag provider to avoid configuration drift*' || 
+          ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) &&
+              '*💡 This preview shows what will change in the remote flag service when you push your local manifest*' ||
               '*📝 This comparison shows changes introduced in this PR*' }}
 
           *This comment is automatically updated on each push*
