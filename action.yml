@@ -370,55 +370,54 @@ runs:
             echo "REMOVE_COUNT=$REMOVE_COUNT" >> $GITHUB_ENV
             echo "MODIFY_COUNT=$MODIFY_COUNT" >> $GITHUB_ENV
             echo "TOTAL_CHANGES=$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))" >> $GITHUB_ENV
-            
+
+            # Set up mode-specific text and YAML section mappings
+            if [ "$REMOTE_COMPARISON" = "true" ]; then
+              ADD_DESC="Flags that will be added to remote"
+              REMOVE_DESC="Flags that will be removed from remote"
+              MODIFY_DESC="Flags that will be modified in remote"
+              ADD_TITLE="Flags That Will Be Added"
+              REMOVE_TITLE="Flags That Will Be Removed"
+              MODIFY_TITLE="Flags That Will Be Modified"
+              ADD_SECTION="removals"
+              REMOVE_SECTION="additions"
+            else
+              ADD_DESC="Flags added in this branch"
+              REMOVE_DESC="Flags removed in this branch"
+              MODIFY_DESC="Flags modified in this branch"
+              ADD_TITLE="Flags Added"
+              REMOVE_TITLE="Flags Removed"
+              MODIFY_TITLE="Flags Modified"
+              ADD_SECTION="additions"
+              REMOVE_SECTION="removals"
+            fi
+
             # Summary table
             echo "## 📊 Change Summary" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| Change Type | Count | Description |" >> $GITHUB_STEP_SUMMARY
             echo "|-------------|-------|-------------|" >> $GITHUB_STEP_SUMMARY
-
-            if [ "$REMOTE_COMPARISON" = "true" ]; then
-              echo "| 🟢 **Additions** | **$ADD_COUNT** | Flags that will be added to remote |" >> $GITHUB_STEP_SUMMARY
-              echo "| 🔴 **Removals** | **$REMOVE_COUNT** | Flags that will be removed from remote |" >> $GITHUB_STEP_SUMMARY
-              echo "| 🟡 **Modifications** | **$MODIFY_COUNT** | Flags that will be modified in remote |" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "| 🟢 **Additions** | **$ADD_COUNT** | Flags added in this branch |" >> $GITHUB_STEP_SUMMARY
-              echo "| 🔴 **Removals** | **$REMOVE_COUNT** | Flags removed in this branch |" >> $GITHUB_STEP_SUMMARY
-              echo "| 🟡 **Modifications** | **$MODIFY_COUNT** | Flags modified in this branch |" >> $GITHUB_STEP_SUMMARY
-            fi
-
+            echo "| 🟢 **Additions** | **$ADD_COUNT** | $ADD_DESC |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 **Removals** | **$REMOVE_COUNT** | $REMOVE_DESC |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 **Modifications** | **$MODIFY_COUNT** | $MODIFY_DESC |" >> $GITHUB_STEP_SUMMARY
             echo "| **Total Changes** | **$((ADD_COUNT + REMOVE_COUNT + MODIFY_COUNT))** | Overall differences detected |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            
+
             # Build change details for PR comment
-            # Note: For remote comparisons, we swapped the counts, so we also need to swap which YAML sections we read
+            # Note: For remote comparisons, we use swapped YAML sections (ADD_SECTION/REMOVE_SECTION)
             CHANGE_DETAILS=""
             if [ $ADD_COUNT -gt 0 ]; then
-              if [ "$REMOTE_COMPARISON" = "true" ]; then
-                CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 Flags That Will Be Added ($ADD_COUNT)\n"
-                ADD_LIST=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟢 `/' | sed 's/$/`/')
-              else
-                CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 Flags Added ($ADD_COUNT)\n"
-                ADD_LIST=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟢 `/' | sed 's/$/`/')
-              fi
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 $ADD_TITLE ($ADD_COUNT)\n"
+              ADD_LIST=$(echo "$RAW_YAML" | sed -n "/^${ADD_SECTION}:/,/^[a-z]/p" | grep "^      path:" | sed 's/^      path: flags\./- 🟢 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${ADD_LIST}\n\n"
             fi
             if [ $REMOVE_COUNT -gt 0 ]; then
-              if [ "$REMOTE_COMPARISON" = "true" ]; then
-                CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 Flags That Will Be Removed ($REMOVE_COUNT)\n"
-                REMOVE_LIST=$(echo "$RAW_YAML" | sed -n '/^additions:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🔴 `/' | sed 's/$/`/')
-              else
-                CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 Flags Removed ($REMOVE_COUNT)\n"
-                REMOVE_LIST=$(echo "$RAW_YAML" | sed -n '/^removals:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🔴 `/' | sed 's/$/`/')
-              fi
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 $REMOVE_TITLE ($REMOVE_COUNT)\n"
+              REMOVE_LIST=$(echo "$RAW_YAML" | sed -n "/^${REMOVE_SECTION}:/,/^[a-z]/p" | grep "^      path:" | sed 's/^      path: flags\./- 🔴 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${REMOVE_LIST}\n\n"
             fi
             if [ $MODIFY_COUNT -gt 0 ]; then
-              if [ "$REMOTE_COMPARISON" = "true" ]; then
-                CHANGE_DETAILS="${CHANGE_DETAILS}### 🟡 Flags That Will Be Modified ($MODIFY_COUNT)\n"
-              else
-                CHANGE_DETAILS="${CHANGE_DETAILS}### 🟡 Flags Modified ($MODIFY_COUNT)\n"
-              fi
+              CHANGE_DETAILS="${CHANGE_DETAILS}### 🟡 $MODIFY_TITLE ($MODIFY_COUNT)\n"
               MODIFY_LIST=$(echo "$RAW_YAML" | sed -n '/^modifications:/,/^[a-z]/p' | grep "^      path:" | sed 's/^      path: flags\./- 🟡 `/' | sed 's/$/`/')
               CHANGE_DETAILS="${CHANGE_DETAILS}${MODIFY_LIST}\n"
             fi
