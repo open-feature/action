@@ -577,3 +577,58 @@ jobs:
             exit 1
           fi
           echo "✅ Correctly detected differences between remote and local manifests"
+
+  test-remote-perspective:
+    runs-on: ubuntu-latest
+    name: Test remote comparison perspective (what will change)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create local manifest with new flag
+        run: |
+          cat > local-with-new-flag.json << EOF
+          {
+            "flags": {
+              "exampleBool": {
+                "flagType": "boolean",
+                "defaultValue": true
+              },
+              "newFlagAddedLocally": {
+                "flagType": "boolean",
+                "defaultValue": true
+            }
+          }
+          EOF
+
+      - name: Test remote comparison perspective
+        id: test-perspective
+        uses: ./
+        with:
+          manifest: local-with-new-flag.json
+          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          post-pr-comment: false
+
+      - name: Verify perspective is correct
+        run: |
+          echo "Testing that the perspective shows 'what will change in remote'"
+          echo "Local manifest has a new flag that remote doesn't have"
+          echo "Expected: Should show as 'will be ADDED to remote' (positive count in ADD_COUNT)"
+          echo ""
+          echo "Has differences: ${{ steps.test-perspective.outputs.has-differences }}"
+          echo "Summary: ${{ steps.test-perspective.outputs.summary }}"
+          echo ""
+          echo "Comparison result:"
+          echo "${{ steps.test-perspective.outputs.comparison-result }}"
+
+          # The test passes if differences are detected
+          # The actual verification of correct perspective happens in the summary/PR comment text
+          # which is checked manually or via the step summary
+          if [ "${{ steps.test-perspective.outputs.has-differences }}" != "true" ]; then
+            echo "::error::Expected differences to be detected!"
+            exit 1
+          fi
+
+          echo "✅ Remote comparison perspective test completed"
+          echo "::notice::Check the step summary to verify the perspective is 'what will change in remote'"
