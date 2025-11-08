@@ -538,7 +538,7 @@ jobs:
 
   test-output-consistency:
     runs-on: ubuntu-latest
-    name: Verify raw output matches summary (--reverse flag test)
+    name: Verify raw output matches summary
 
     steps:
       - name: Checkout repository
@@ -565,7 +565,7 @@ jobs:
           }
           EOF
 
-      - name: Test remote mode with --reverse flag
+      - name: Test remote mode
         id: remote-test
         uses: ./
         with:
@@ -598,7 +598,7 @@ jobs:
 
           # Verify expectations for remote mode
           # Local manifest has 1 new flag (newFlagAddedLocally)
-          # With --reverse flag, this should appear in "additions" section
+          # This should appear in "additions" section
           # (what will be ADDED to remote when pushed)
 
           if [ "$ADD_COUNT" -eq 0 ]; then
@@ -608,7 +608,7 @@ jobs:
           fi
 
           echo "✅ Raw YAML has correct structure for remote mode"
-          echo "✅ With --reverse flag, additions section correctly shows flags that will be added to remote"
+          echo "✅ Additions section correctly shows flags that will be added to remote"
           echo ""
 
           # Verify summary perspective
@@ -638,7 +638,7 @@ jobs:
           }
           EOF
 
-      - name: Test git mode (no --reverse flag)
+      - name: Test git mode
         id: git-test
         uses: ./
         with:
@@ -666,10 +666,9 @@ jobs:
             echo "$RAW_YAML"
             echo ""
 
-            # In git mode (no --reverse), output should show receiving perspective
-            # (what changed in this branch compared to base)
+            # Git mode shows what changed in this branch compared to base
             echo "✅ Git mode detected differences"
-            echo "✅ Git mode uses default perspective (what changed in branch)"
+            echo "✅ Git mode shows what changed in branch"
           else
             echo "ℹ️  No differences detected in git mode (expected if flag exists in main)"
           fi
@@ -681,9 +680,9 @@ jobs:
           echo "=== Output Consistency Test Results ==="
           echo ""
           echo "✅ All tests passed!"
-          echo "  - Remote mode uses --reverse flag correctly"
+          echo "  - Remote mode output shows correct perspective"
           echo "  - Raw YAML output matches expected perspective"
           echo "  - Additions in raw YAML = flags that will be added to remote"
-          echo "  - Git mode uses default perspective (no --reverse)"
+          echo "  - Git mode shows what changed in branch"
           echo ""
-          echo "This confirms that the --reverse flag fix resolves the output mismatch issue"
+          echo "This confirms that the output consistency is correct for both modes"
