@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.6](https://github.com/open-feature/action/compare/v0.0.5...v0.0.6) (2025-11-08)
+
+
+### 🔙 Reverts
+
+* remove the --reverse flag from the compare ([#27](https://github.com/open-feature/action/issues/27)) ([59edb70](https://github.com/open-feature/action/commit/59edb70e293aa6362d6d51a72a9638fdcc2d0c85))
+
 ## [0.0.5](https://github.com/open-feature/action/compare/v0.0.4...v0.0.5) (2025-11-08)
 
 
