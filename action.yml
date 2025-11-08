@@ -476,9 +476,9 @@ runs:
 
             # Count changes using yq (robust YAML parsing)
             # CLI outputs correct perspective based on --reverse flag
-            ADD_COUNT=$(echo "$RAW_YAML" | yq e '.additions | length // 0' - 2>/dev/null || echo 0)
-            REMOVE_COUNT=$(echo "$RAW_YAML" | yq e '.removals | length // 0' - 2>/dev/null || echo 0)
-            MODIFY_COUNT=$(echo "$RAW_YAML" | yq e '.modifications | length // 0' - 2>/dev/null || echo 0)
+            ADD_COUNT=$(echo "$RAW_YAML" | yq e '.additions // [] | length' - 2>/dev/null || echo 0)
+            REMOVE_COUNT=$(echo "$RAW_YAML" | yq e '.removals // [] | length' - 2>/dev/null || echo 0)
+            MODIFY_COUNT=$(echo "$RAW_YAML" | yq e '.modifications // [] | length' - 2>/dev/null || echo 0)
 
             log_info "Parsed changes: $ADD_COUNT additions, $REMOVE_COUNT removals, $MODIFY_COUNT modifications"
 
