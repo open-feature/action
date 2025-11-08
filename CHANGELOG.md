@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.5](https://github.com/open-feature/action/compare/v0.0.4...v0.0.5) (2025-11-08)
+
+
+### ✨ New Features
+
+* use updated compare logic in cli ([#25](https://github.com/open-feature/action/issues/25)) ([1ce915d](https://github.com/open-feature/action/commit/1ce915d123ae63d7213e7c98df1c19314c242658))
+
 ## [0.0.4](https://github.com/open-feature/action/compare/v0.0.3...v0.0.4) (2025-11-07)
 
 
