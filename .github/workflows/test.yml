@@ -324,7 +324,7 @@ jobs:
     name: Test different CLI versions
     strategy:
       matrix:
-        cli-version: ['latest', 'v0.3.6']
+        cli-version: ['latest', 'v0.3.12']
 
     steps:
       - name: Checkout repository
