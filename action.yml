@@ -325,22 +325,17 @@ runs:
         if [ "$REMOTE_COMPARISON" = "true" ]; then
           log_group "Running comparison in remote mode"
 
-          # Remote comparison: use --reverse flag for sending perspective
-          REVERSE_FLAG="--reverse"
-
           # User-facing descriptions
           ADD_DESC="Flags that will be added to remote"
           REMOVE_DESC="Flags that will be removed from remote"
           MODIFY_DESC="Flags that will be modified in remote"
 
           log_info "Perspective: What will change in remote when pushed"
-          log_info "Command: compare --manifest <local> --against <remote> --reverse"
+          log_info "Command: compare --manifest <local> --against <remote>"
         else
           log_group "Running comparison in git mode"
 
           # Git comparison: compare current branch against the target branch
-          REVERSE_FLAG=""
-
           # User-facing descriptions
           ADD_DESC="Flags added in this branch"
           REMOVE_DESC="Flags removed in this branch"
@@ -369,9 +364,6 @@ runs:
         log_info "Executing OpenFeature CLI compare..."
 
         COMPARE_CMD=("$CLI_PATH" "compare" "--manifest" "$MANIFEST_PARAM" "--against" "$AGAINST_PARAM" "--output" "yaml")
-        if [ -n "$REVERSE_FLAG" ]; then
-          COMPARE_CMD+=("$REVERSE_FLAG")
-        fi
 
         # Debug: Show exact command
         log_debug "Exact command being executed:"
@@ -475,7 +467,6 @@ runs:
             RAW_YAML=$(cat comparison-output/raw-output.txt)
 
             # Count changes using yq (robust YAML parsing)
-            # CLI outputs correct perspective based on --reverse flag
             ADD_COUNT=$(echo "$RAW_YAML" | yq e '.additions // [] | length' - 2>/dev/null || echo 0)
             REMOVE_COUNT=$(echo "$RAW_YAML" | yq e '.removals // [] | length' - 2>/dev/null || echo 0)
             MODIFY_COUNT=$(echo "$RAW_YAML" | yq e '.modifications // [] | length' - 2>/dev/null || echo 0)
