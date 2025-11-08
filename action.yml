@@ -319,32 +319,14 @@ runs:
         # Source our functions
         source /tmp/action_functions.sh
 
-        # ============================================================================
-        # COMPARISON MODE: Determine perspective and parameters
-        # ============================================================================
-        # Git mode: Show "what changed in this branch"
-        #   - additions = flags added in PR
-        #   - removals = flags removed in PR
-        #
-        # Remote mode: Show "what will change in remote when pushed" (manifest = desired state)
-        #   - We swap CLI parameters so remote is the reference
-        #   - Then use swapped section names so output shows push impact
-        # ============================================================================
+        MANIFEST_PARAM="$LOCAL_MANIFEST_PATH"
+        AGAINST_PARAM="${{ inputs.against-manifest-path }}"
 
         if [ "$REMOTE_COMPARISON" = "true" ]; then
           log_group "Running comparison in remote mode"
 
-          # Remote comparison: swap parameters to compare remote vs local
-          # This makes remote the "old" state and local the "new" desired state
-          MANIFEST_PARAM="${{ inputs.against-manifest-path }}"
-          # Swap parameters: AGAINST_PARAM is set to local manifest so comparison shows what will change in remote.
-          AGAINST_PARAM="$LOCAL_MANIFEST_PATH"
-
-          # Section mappings (for parsing output with correct perspective)
-          # CLI's "additions" (in remote, not in local) = will be REMOVED from remote
-          # CLI's "removals" (in local, not in remote) = will be ADDED to remote
-          ADD_SECTION="removals"
-          REMOVE_SECTION="additions"
+          # Remote comparison: use --reverse flag for sending perspective
+          REVERSE_FLAG="--reverse"
 
           # User-facing descriptions
           ADD_DESC="Flags that will be added to remote"
@@ -352,17 +334,12 @@ runs:
           MODIFY_DESC="Flags that will be modified in remote"
 
           log_info "Perspective: What will change in remote when pushed"
-          log_info "Command: compare --manifest <remote> --against <local>"
+          log_info "Command: compare --manifest <local> --against <remote> --reverse"
         else
           log_group "Running comparison in git mode"
 
-          # Git comparison: normal parameter order
-          MANIFEST_PARAM="$LOCAL_MANIFEST_PATH"
-          AGAINST_PARAM="${{ inputs.against-manifest-path }}"
-
-          # Normal section mappings
-          ADD_SECTION="additions"
-          REMOVE_SECTION="removals"
+          # Git comparison: compare current branch against the target branch
+          REVERSE_FLAG=""
 
           # User-facing descriptions
           ADD_DESC="Flags added in this branch"
@@ -391,12 +368,17 @@ runs:
         # Run comparison
         log_info "Executing OpenFeature CLI compare..."
 
+        COMPARE_CMD=("$CLI_PATH" "compare" "--manifest" "$MANIFEST_PARAM" "--against" "$AGAINST_PARAM" "--output" "yaml")
+        if [ -n "$REVERSE_FLAG" ]; then
+          COMPARE_CMD+=("$REVERSE_FLAG")
+        fi
+
         # Debug: Show exact command
         log_debug "Exact command being executed:"
-        log_debug "$CLI_PATH compare --manifest \"$MANIFEST_PARAM\" --against \"$AGAINST_PARAM\" --output yaml"
+        log_debug "${COMPARE_CMD[*]}"
 
         set +e
-        COMPARE_OUTPUT=$($CLI_PATH compare --manifest "$MANIFEST_PARAM" --against "$AGAINST_PARAM" --output yaml 2>&1)
+        COMPARE_OUTPUT=$("${COMPARE_CMD[@]}" 2>&1)
         COMPARE_EXIT_CODE=$?
         set -e
 
@@ -422,9 +404,7 @@ runs:
           log_info "Differences detected"
         fi
 
-        # Export section mappings for next step
-        echo "ADD_SECTION=$ADD_SECTION" >> $GITHUB_ENV
-        echo "REMOVE_SECTION=$REMOVE_SECTION" >> $GITHUB_ENV
+        # Export descriptions for next step
         echo "ADD_DESC=$ADD_DESC" >> $GITHUB_ENV
         echo "REMOVE_DESC=$REMOVE_DESC" >> $GITHUB_ENV
         echo "MODIFY_DESC=$MODIFY_DESC" >> $GITHUB_ENV
@@ -495,10 +475,10 @@ runs:
             RAW_YAML=$(cat comparison-output/raw-output.txt)
 
             # Count changes using yq (robust YAML parsing)
-            # Use section mappings from previous step (already swapped for remote mode)
-            ADD_COUNT=$(echo "$RAW_YAML" | yq e ".$ADD_SECTION | length // 0" -)
-            REMOVE_COUNT=$(echo "$RAW_YAML" | yq e ".$REMOVE_SECTION | length // 0" -)
-            MODIFY_COUNT=$(echo "$RAW_YAML" | yq e '.modifications | length // 0' -)
+            # CLI outputs correct perspective based on --reverse flag
+            ADD_COUNT=$(echo "$RAW_YAML" | yq e '.additions // [] | length' - 2>/dev/null || echo 0)
+            REMOVE_COUNT=$(echo "$RAW_YAML" | yq e '.removals // [] | length' - 2>/dev/null || echo 0)
+            MODIFY_COUNT=$(echo "$RAW_YAML" | yq e '.modifications // [] | length' - 2>/dev/null || echo 0)
 
             log_info "Parsed changes: $ADD_COUNT additions, $REMOVE_COUNT removals, $MODIFY_COUNT modifications"
 
@@ -537,12 +517,12 @@ runs:
             CHANGE_DETAILS=""
             if [ $ADD_COUNT -gt 0 ]; then
               CHANGE_DETAILS="${CHANGE_DETAILS}### 🟢 $ADD_TITLE ($ADD_COUNT)\n"
-              ADD_LIST=$(echo "$RAW_YAML" | yq e ".$ADD_SECTION[].path" - | sed 's|^flags\.||' | sed 's|^|🟢 `|' | sed 's|$|`|')
+              ADD_LIST=$(echo "$RAW_YAML" | yq e '.additions[].path' - | sed 's|^flags\.||' | sed 's|^|🟢 `|' | sed 's|$|`|')
               CHANGE_DETAILS="${CHANGE_DETAILS}${ADD_LIST}\n\n"
             fi
             if [ $REMOVE_COUNT -gt 0 ]; then
               CHANGE_DETAILS="${CHANGE_DETAILS}### 🔴 $REMOVE_TITLE ($REMOVE_COUNT)\n"
-              REMOVE_LIST=$(echo "$RAW_YAML" | yq e ".$REMOVE_SECTION[].path" - | sed 's|^flags\.||' | sed 's|^|🔴 `|' | sed 's|$|`|')
+              REMOVE_LIST=$(echo "$RAW_YAML" | yq e '.removals[].path' - | sed 's|^flags\.||' | sed 's|^|🔴 `|' | sed 's|$|`|')
               CHANGE_DETAILS="${CHANGE_DETAILS}${REMOVE_LIST}\n\n"
             fi
             if [ $MODIFY_COUNT -gt 0 ]; then
@@ -665,9 +645,9 @@ runs:
 
           | Change Type | Count | Description |
           |-------------|-------|-------------|
-          | 🟢 **Additions** | **${{ env.ADD_COUNT }}** | ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 'Flags that will be added to remote' || 'Flags added in this branch' }} |
-          | 🔴 **Removals** | **${{ env.REMOVE_COUNT }}** | ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 'Flags that will be removed from remote' || 'Flags removed in this branch' }} |
-          | 🟡 **Modifications** | **${{ env.MODIFY_COUNT }}** | ${{ (contains(inputs.against, '://') || contains(inputs.against, ':')) && 'Flags that will be modified in remote' || 'Flags modified in this branch' }} |
+          | 🟢 **Additions** | **${{ env.ADD_COUNT }}** | ${{ env.ADD_DESC }} |
+          | 🔴 **Removals** | **${{ env.REMOVE_COUNT }}** | ${{ env.REMOVE_DESC }} |
+          | 🟡 **Modifications** | **${{ env.MODIFY_COUNT }}** | ${{ env.MODIFY_DESC }} |
           | **Total** | **${{ env.TOTAL_CHANGES }}** | Total differences |
 
           <details>
