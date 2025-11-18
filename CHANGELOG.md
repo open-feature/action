@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.7](https://github.com/open-feature/action/compare/v0.0.6...v0.0.7) (2025-11-18)
+
+
+### 🧹 Chore
+
+* update copyright to OpenFeature Maintainers ([#29](https://github.com/open-feature/action/issues/29)) ([36f28cb](https://github.com/open-feature/action/commit/36f28cbe9decf2fa30a2cf3aea5f5ed913cb08ff))
+
 ## [0.0.6](https://github.com/open-feature/action/compare/v0.0.5...v0.0.6) (2025-11-08)
 
 
