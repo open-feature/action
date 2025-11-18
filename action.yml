@@ -39,6 +39,16 @@ inputs:
     description: 'Post a comment on the PR when differences are detected'
     required: false
     default: 'true'
+  validate-generators:
+    description: 'Array of generator types to validate (e.g., ["react", "go", "python"]). When specified, runs generation and checks for uncommitted changes'
+    required: false
+  validate-generators-strict:
+    description: 'Fail the action if generated files are out of sync (default: true)'
+    required: false
+    default: 'true'
+  validate-generators-output-dir:
+    description: 'Custom output directory for generated files (optional, uses generator defaults if not specified)'
+    required: false
 
 outputs:
   has-differences:
@@ -56,6 +66,15 @@ outputs:
   summary:
     description: 'Human-readable summary of changes'
     value: ${{ steps.compare.outputs.summary }}
+  validation-failed:
+    description: 'Whether validation detected out-of-sync generated files'
+    value: ${{ steps.validate-generation.outputs.validation-failed }}
+  validation-changes:
+    description: 'Details of which files changed during generation validation'
+    value: ${{ steps.validate-generation.outputs.validation-changes }}
+  validation-summary:
+    description: 'Human-readable summary of validation results'
+    value: ${{ steps.validate-generation.outputs.validation-summary }}
 
 runs:
   using: 'composite'
@@ -682,5 +701,283 @@ runs:
 
         if [ "$HAS_DIFFERENCES" = "true" ] && [ "$STRICT_MODE" = "true" ]; then
           echo "::error::Manifest differences detected in strict mode"
+          exit 1
+        fi
+
+    - name: Validate Generated Clients
+      id: validate-generation
+      if: inputs.validate-generators != ''
+      shell: bash
+      run: |
+        # Source our functions
+        source /tmp/action_functions.sh
+
+        log_group "Validating Generated Clients"
+
+        # Parse generators from input (YAML array format like ["react", "go"])
+        GENERATORS="${{ inputs.validate-generators }}"
+
+        # Remove brackets and quotes, split by comma
+        GENERATORS_CLEAN=$(echo "$GENERATORS" | sed 's/\[//g' | sed 's/\]//g' | sed 's/"//g' | sed "s/'//g")
+
+        log_info "Generators to validate: $GENERATORS_CLEAN"
+
+        # Determine manifest path to use
+        if [ -f "$LOCAL_MANIFEST_PATH" ]; then
+          MANIFEST_FOR_GENERATION="$LOCAL_MANIFEST_PATH"
+        else
+          MANIFEST_FOR_GENERATION="${{ inputs.manifest }}"
+        fi
+
+        log_info "Using manifest: $MANIFEST_FOR_GENERATION"
+
+        # Initialize counters
+        GENERATOR_COUNT=0
+        FAILED_GENERATORS=""
+
+        # Process each generator
+        IFS=',' read -ra GENERATOR_ARRAY <<< "$GENERATORS_CLEAN"
+        for GENERATOR in "${GENERATOR_ARRAY[@]}"; do
+          # Trim whitespace
+          GENERATOR=$(echo "$GENERATOR" | xargs)
+
+          if [ -z "$GENERATOR" ]; then
+            continue
+          fi
+
+          GENERATOR_COUNT=$((GENERATOR_COUNT + 1))
+
+          log_info "Running generator: $GENERATOR"
+
+          # Build generation command
+          GEN_CMD=("$CLI_PATH" "generate" "$GENERATOR" "--manifest" "$MANIFEST_FOR_GENERATION" "--no-input")
+
+          # Add output directory if specified
+          if [ -n "${{ inputs.validate-generators-output-dir }}" ]; then
+            GEN_CMD+=("--output" "${{ inputs.validate-generators-output-dir }}")
+          fi
+
+          # Run generation
+          log_info "Command: ${GEN_CMD[*]}"
+          set +e
+          GEN_OUTPUT=$("${GEN_CMD[@]}" 2>&1)
+          GEN_EXIT_CODE=$?
+          set -e
+
+          if [ $GEN_EXIT_CODE -ne 0 ]; then
+            log_error "Generation failed for $GENERATOR"
+            log_info "Output:"
+            echo "$GEN_OUTPUT" | sed 's/^/    /'
+            FAILED_GENERATORS="$FAILED_GENERATORS $GENERATOR"
+          else
+            log_success "Generation completed for $GENERATOR"
+          fi
+        done
+
+        # Check if git working directory is clean
+        log_info ""
+        log_info "🔍 Checking if generated files match the manifest..."
+
+        # Get git status
+        if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+          # There are changes
+          VALIDATION_FAILED="true"
+
+          log_error "⚠️  Validation failed: Generated files are out of sync"
+          log_info ""
+          log_info "📝 Files that need to be regenerated:"
+
+          # Get all changed files
+          CHANGED_FILES=$(git diff --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null | sort -u)
+
+          echo "$CHANGED_FILES" | sed 's/^/    • /'
+
+          # Build changes list for output
+          VALIDATION_CHANGES="The following files are out of sync:\n\n"
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              VALIDATION_CHANGES="${VALIDATION_CHANGES}- \`$file\`\n"
+            fi
+          done <<< "$CHANGED_FILES"
+
+          VALIDATION_SUMMARY="⚠️  Generated clients are out of sync with \`$MANIFEST_FOR_GENERATION\`"
+          log_info ""
+          log_info "💡 Fix this by running:"
+          for gen in $GENERATORS_CLEAN; do
+            log_info "   openfeature generate $gen --manifest $MANIFEST_FOR_GENERATION"
+          done
+          log_info ""
+          log_info "Then commit the updated files."
+        else
+          # No changes - all up to date
+          VALIDATION_FAILED="false"
+          VALIDATION_CHANGES=""
+          VALIDATION_SUMMARY="✅ All $GENERATOR_COUNT generator(s) validated successfully"
+          log_success "$VALIDATION_SUMMARY"
+          log_info "Generated clients are in sync with the manifest"
+        fi
+
+        # Handle generation failures
+        if [ -n "$FAILED_GENERATORS" ]; then
+          VALIDATION_FAILED="true"
+          FAILED_COUNT=$(echo "$FAILED_GENERATORS" | wc -w | xargs)
+          VALIDATION_SUMMARY="❌ $FAILED_COUNT generator(s) failed:$FAILED_GENERATORS"
+          log_error "Generation failed for:$FAILED_GENERATORS"
+          log_info "Check the logs above for error details"
+        fi
+
+        # Set outputs
+        echo "validation-failed=$VALIDATION_FAILED" >> $GITHUB_OUTPUT
+        echo "validation-changes<<EOF" >> $GITHUB_OUTPUT
+        echo -e "$VALIDATION_CHANGES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "validation-summary<<EOF" >> $GITHUB_OUTPUT
+        echo "$VALIDATION_SUMMARY" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        # Build commands for PR comment
+        REGENERATE_COMMANDS=""
+        for gen in $GENERATORS_CLEAN; do
+          if [ -n "$gen" ]; then
+            REGENERATE_COMMANDS="${REGENERATE_COMMANDS}openfeature generate $gen --manifest ${{ inputs.manifest }}\n"
+          fi
+        done
+
+        # Export for PR comments and next steps
+        echo "VALIDATION_FAILED=$VALIDATION_FAILED" >> $GITHUB_ENV
+        echo "VALIDATION_SUMMARY=$VALIDATION_SUMMARY" >> $GITHUB_ENV
+        echo "VALIDATION_CHANGES<<EOF" >> $GITHUB_ENV
+        echo -e "$VALIDATION_CHANGES" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+        echo "FAILED_GENERATORS=$FAILED_GENERATORS" >> $GITHUB_ENV
+        echo "GENERATOR_LIST=$GENERATORS_CLEAN" >> $GITHUB_ENV
+        echo "REGENERATE_COMMANDS<<EOF" >> $GITHUB_ENV
+        echo -e "$REGENERATE_COMMANDS" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+
+        log_endgroup
+
+    - name: Add Validation to Summary
+      if: inputs.validate-generators != ''
+      shell: bash
+      run: |
+        # Source our functions
+        source /tmp/action_functions.sh
+
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🔍 Generated Client Validation" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [ "$VALIDATION_FAILED" = "true" ]; then
+          echo "> [!WARNING]" >> $GITHUB_STEP_SUMMARY
+          echo "> **Action Required:** Generated clients are out of sync with \`${{ inputs.manifest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### ⚡ Quick Fix" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Run these commands to regenerate your clients:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo -e "$REGENERATE_COMMANDS" >> $GITHUB_STEP_SUMMARY
+          echo 'git add .' >> $GITHUB_STEP_SUMMARY
+          echo 'git commit -m "chore: regenerate OpenFeature clients after manifest update"' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary><strong>📋 Files that will be updated</strong></summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "$VALIDATION_CHANGES" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "**Validated generators:** $GENERATOR_LIST" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "> [!NOTE]" >> $GITHUB_STEP_SUMMARY
+          echo "> ✅ **All generated clients are up to date**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Validated generators:** $GENERATOR_LIST" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Post Validation PR Comment
+      if: |
+        github.event_name == 'pull_request' &&
+        inputs.validate-generators != '' &&
+        steps.validate-generation.outputs.validation-failed == 'true' &&
+        inputs.post-pr-comment == 'true'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: openfeature-generation-validation-${{ github.job }}
+        message: |
+          ## 🔄 Action Required: Regenerate OpenFeature Clients
+
+          > [!WARNING]
+          > **Generated clients are out of sync** — The flag manifest was updated but generated code wasn't regenerated.
+
+          ---
+
+          ### ⚡ Quick Fix
+
+          Copy and run this script to regenerate your clients:
+
+          ```bash
+          # Regenerate OpenFeature clients
+          ${{ env.REGENERATE_COMMANDS }}
+          # Commit the changes
+          git add .
+          git commit -m "chore: regenerate OpenFeature clients after manifest update"
+          ```
+
+          ---
+
+          <details>
+          <summary>📋 <strong>Files that will be updated</strong> (click to expand)</summary>
+
+          ${{ env.VALIDATION_CHANGES }}
+
+          </details>
+
+          <details>
+          <summary>🔍 <strong>Validation details</strong></summary>
+
+          - **Manifest:** `${{ inputs.manifest }}`
+          - **Generators validated:** ${{ env.GENERATOR_LIST }}
+          - **Status:** Changes detected in generated files
+
+          **Why does this matter?**
+          Generated clients provide type-safe access to your feature flags. When the manifest changes but code isn't regenerated, you risk type mismatches, outdated flag references, and runtime errors.
+
+          </details>
+
+          <sub>💡 **Tip:** Add a pre-commit hook to auto-generate clients and avoid this check failing in CI</sub>
+
+          ---
+
+          <sub>🤖 Generated by [OpenFeature Action](https://github.com/openfeature/action) • This comment updates automatically</sub>
+
+    - name: Delete Validation PR Comment if Passed
+      if: |
+        github.event_name == 'pull_request' &&
+        inputs.validate-generators != '' &&
+        steps.validate-generation.outputs.validation-failed == 'false' &&
+        inputs.post-pr-comment == 'true'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: openfeature-generation-validation-${{ github.job }}
+        delete: true
+
+    - name: Handle Validation Failure
+      if: inputs.validate-generators != ''
+      shell: bash
+      run: |
+        VALIDATION_FAILED="${{ steps.validate-generation.outputs.validation-failed }}"
+        VALIDATION_STRICT="${{ inputs.validate-generators-strict }}"
+
+        if [ "$VALIDATION_FAILED" = "true" ] && [ "$VALIDATION_STRICT" = "true" ]; then
+          echo "::error::Generated client validation failed in strict mode"
+          echo "::error::Please regenerate your clients and commit the changes"
           exit 1
         fi
