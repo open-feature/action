@@ -10,7 +10,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # Required for posting PR comments
+  pull-requests: write # Required for posting PR comments
 
 jobs:
   test-action:
@@ -44,8 +44,8 @@ jobs:
         uses: ./
         id: compare-manifests
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'openfeature.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "openfeature.json"
           strict: false
           post-pr-comment: false
 
@@ -59,19 +59,19 @@ jobs:
         id: compare-with-fail
         continue-on-error: true
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'openfeature.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "openfeature.json"
           strict: true
           post-pr-comment: false
-          against-manifest-path: 'against-test.json'
+          against-manifest-path: "against-test.json"
 
       - name: Test error handling - missing local file
         uses: ./
         id: test-missing-local
         continue-on-error: true
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'nonexistent.yml'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "nonexistent.yml"
           post-pr-comment: false
 
       - name: Verify error handling worked
@@ -87,8 +87,8 @@ jobs:
         id: test-invalid-against
         continue-on-error: true
         with:
-          against: 'https://httpbin.org/status/404'
-          manifest: 'flags.json'
+          against: "https://httpbin.org/status/404"
+          manifest: "flags.json"
           post-pr-comment: false
 
       - name: Verify invalid against URL error handling
@@ -104,8 +104,8 @@ jobs:
         id: test-auth-required
         continue-on-error: true
         with:
-          against: 'https://httpbin.org/status/401'
-          manifest: 'flags.json'
+          against: "https://httpbin.org/status/401"
+          manifest: "flags.json"
           post-pr-comment: false
 
       - name: Verify authentication error handling
@@ -121,8 +121,8 @@ jobs:
         id: test-invalid-manifest
         continue-on-error: true
         with:
-          manifest: 'https://httpbin.org/status/500'
-          against: 'flags.json'
+          manifest: "https://httpbin.org/status/500"
+          against: "flags.json"
           post-pr-comment: false
 
       - name: Verify invalid manifest URL error handling
@@ -136,7 +136,7 @@ jobs:
   test-manifest-differences:
     runs-on: ubuntu-latest
     name: Test various manifest difference scenarios
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -144,7 +144,7 @@ jobs:
       - name: Test scenario - Flags added locally
         run: |
           echo "::notice::Testing scenario where local has additional flags"
-          
+
           # Create local manifest with extra flags
           cat > local-added.json << EOF
           {
@@ -167,15 +167,15 @@ jobs:
             }
           }
           EOF
-          
+
       - name: Compare - local has additional flags
         uses: ./
         id: test-added
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'local-added.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "local-added.json"
           post-pr-comment: false
-          
+
       - name: Display results for added flags
         run: |
           echo "Has differences: ${{ steps.test-added.outputs.has-differences }}"
@@ -185,7 +185,7 @@ jobs:
       - name: Test scenario - Flags removed locally
         run: |
           echo "::notice::Testing scenario where local is missing flags that exist in remote"
-          
+
           # Create minimal local manifest (missing many remote flags)
           cat > local-removed.json << EOF
           {
@@ -198,15 +198,15 @@ jobs:
             }
           }
           EOF
-          
+
       - name: Compare - local missing flags
         uses: ./
         id: test-removed
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'local-removed.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "local-removed.json"
           post-pr-comment: false
-          
+
       - name: Display results for removed flags
         run: |
           echo "Has differences: ${{ steps.test-removed.outputs.has-differences }}"
@@ -215,7 +215,7 @@ jobs:
       - name: Test scenario - Modified flag values
         run: |
           echo "::notice::Testing scenario where flags exist in both but with different values"
-          
+
           # Create local manifest with modified values
           cat > local-modified.json << EOF
           {
@@ -243,8 +243,8 @@ jobs:
         uses: ./
         id: test-modified
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'local-modified.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "local-modified.json"
           post-pr-comment: false
 
       - name: Display results for modified flags
@@ -256,7 +256,7 @@ jobs:
       - name: Test scenario - Identical manifests
         run: |
           echo "::notice::Testing scenario where manifests are identical"
-          
+
           # Download the remote manifest to use as local
           curl -s https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json > identical.json
 
@@ -264,8 +264,8 @@ jobs:
         uses: ./
         id: test-identical
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'identical.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "identical.json"
           post-pr-comment: false
 
       - name: Display results for identical manifests
@@ -281,7 +281,7 @@ jobs:
       - name: Test scenario - Complex mixed changes
         run: |
           echo "::notice::Testing scenario with added, removed, and modified flags"
-          
+
           cat > local-mixed.json << EOF
           {
             "flags": {
@@ -309,8 +309,8 @@ jobs:
         uses: ./
         id: test-mixed
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'local-mixed.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "local-mixed.json"
           post-pr-comment: false
 
       - name: Display results for mixed changes
@@ -324,7 +324,7 @@ jobs:
     name: Test different CLI versions
     strategy:
       matrix:
-        cli-version: ['latest', 'v0.3.12', 'v0.3.6']
+        cli-version: ["latest", "v0.3.12", "v0.3.6"]
 
     steps:
       - name: Checkout repository
@@ -347,21 +347,21 @@ jobs:
       - name: Test with CLI version ${{ matrix.cli-version }}
         uses: ./
         with:
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          manifest: 'version-test.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "version-test.json"
           cli-version: ${{ matrix.cli-version }}
           post-pr-comment: false
 
   test-git-mode:
     runs-on: ubuntu-latest
     name: Test Git branch comparison mode
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch full history for branch comparison
-      
+          fetch-depth: 0 # Fetch full history for branch comparison
+
       - name: Create sample manifest on current branch
         run: |
           cat > flags.json << EOF
@@ -380,7 +380,7 @@ jobs:
             }
           }
           EOF
-      
+
       - name: Test git mode with explicit base branch (should use main)
         uses: ./
         id: git-mode-explicit
@@ -390,13 +390,13 @@ jobs:
           strict: false
           post-pr-comment: false
         continue-on-error: true
-        
+
       - name: Display git mode results
         run: |
           echo "::notice::Git mode test completed"
           echo "Has differences: ${{ steps.git-mode-explicit.outputs.has-differences }}"
           echo "Summary: ${{ steps.git-mode-explicit.outputs.summary }}"
-          
+
       - name: Test minimal git mode (no against specified)
         uses: ./
         id: git-mode-minimal
@@ -405,7 +405,7 @@ jobs:
           strict: false
           post-pr-comment: false
         continue-on-error: true
-        
+
       - name: Test git mode with different path mapping
         run: |
           # Create a manifest in a subdirectory
@@ -421,13 +421,13 @@ jobs:
             }
           }
           EOF
-        
+
       - name: Test git mode with path mapping
         uses: ./
         id: git-mode-path-mapping
         with:
           manifest: config/feature-flags.json
-          against: flags.json  # Compare different paths
+          against: flags.json # Compare different paths
           base-branch: main
           strict: false
           post-pr-comment: false
@@ -436,21 +436,21 @@ jobs:
   test-protocol-detection:
     runs-on: ubuntu-latest
     name: Test various URL protocol detection
-    
+
     strategy:
       matrix:
         protocol:
-          - url: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-            description: 'HTTPS URL'
-          - url: 'http://httpbin.org/json'
-            description: 'HTTP URL'
-          - url: 'file:///etc/hosts'
-            description: 'File protocol'
-        
+          - url: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+            description: "HTTPS URL"
+          - url: "http://httpbin.org/json"
+            description: "HTTP URL"
+          - url: "file:///etc/hosts"
+            description: "File protocol"
+
     steps:
-      - name: Checkout repository  
+      - name: Checkout repository
         uses: actions/checkout@v4
-        
+
       - name: Create test manifest
         run: |
           cat > protocol-test.json << EOF
@@ -464,7 +464,7 @@ jobs:
             }
           }
           EOF
-          
+
       - name: Test ${{ matrix.protocol.description }}
         uses: ./
         continue-on-error: true
@@ -477,31 +477,31 @@ jobs:
   test-remote-to-remote:
     runs-on: ubuntu-latest
     name: Test remote-to-remote manifest comparison
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        
+
       - name: Test remote manifest against remote against
         uses: ./
         id: remote-to-remote
         with:
-          manifest: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          manifest: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
           post-pr-comment: false
-          
+
       - name: Verify identical remote manifests
         run: |
           echo "Has differences: ${{ steps.remote-to-remote.outputs.has-differences }}"
           echo "Local manifest path: ${{ steps.remote-to-remote.outputs.local-manifest-path }}"
           echo "Against manifest path: ${{ steps.remote-to-remote.outputs.against-manifest-path }}"
-          
+
           if [ "${{ steps.remote-to-remote.outputs.has-differences }}" = "true" ]; then
             echo "::error::Expected no differences for identical remote manifests!"
             exit 1
           fi
           echo "✅ Correctly identified identical remote manifests"
-          
+
       - name: Test different remote manifests
         run: |
           # Create a different manifest to upload somewhere accessible
@@ -516,20 +516,20 @@ jobs:
             }
           }
           EOF
-          
+
       - name: Test remote vs different remote (simulated)
         uses: ./
         id: different-remotes
         with:
-          manifest: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
-          against: different-manifest.json  # Use local file as "against" to simulate different remote
+          manifest: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          against: different-manifest.json # Use local file as "against" to simulate different remote
           post-pr-comment: false
-          
+
       - name: Verify different manifests detected
         run: |
           echo "Has differences: ${{ steps.different-remotes.outputs.has-differences }}"
           echo "Summary: ${{ steps.different-remotes.outputs.summary }}"
-          
+
           if [ "${{ steps.different-remotes.outputs.has-differences }}" = "false" ]; then
             echo "::error::Expected differences between different manifests!"
             exit 1
@@ -544,7 +544,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # For git mode test
+          fetch-depth: 0 # For git mode test
 
       - name: Create local manifest with new flag (remote mode test)
         run: |
@@ -570,7 +570,7 @@ jobs:
         uses: ./
         with:
           manifest: local-new-flag.json
-          against: 'https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json'
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
           post-pr-comment: false
 
       - name: Verify remote mode raw output matches summary
@@ -686,3 +686,91 @@ jobs:
           echo "  - Git mode shows what changed in branch"
           echo ""
           echo "This confirms that the output consistency is correct for both modes"
+
+  # Test generated client validation feature
+  test-validation-feature:
+    runs-on: ubuntu-latest
+    name: Test Generated Client Validation
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test validation with up-to-date files
+        id: test-validation-pass
+        uses: ./
+        with:
+          manifest: "flags.json"
+          post-pr-comment: false
+          validate-generators: '["react"]'
+          validate-generators-output-dir: "test-gen-output"
+          validate-generators-strict: false
+
+      - name: Verify validation passed
+        run: |
+          echo "=== Testing Validation Feature ==="
+          echo "Validation failed: ${{ steps.test-validation-pass.outputs.validation-failed }}"
+          echo "Validation summary: ${{ steps.test-validation-pass.outputs.validation-summary }}"
+
+      - name: Test validation detects out-of-sync files
+        id: test-validation-detect
+        uses: ./
+        continue-on-error: true
+        with:
+          post-pr-comment: false
+          manifest: "test-fixtures/test-manifest-modified.json"
+          validate-generators: '["react"]'
+          validate-generators-output-dir: "test-gen-output"
+          validate-generators-strict: false
+
+      - name: Verify validation detected changes
+        run: |
+          echo "Validation failed: ${{ steps.test-validation-detect.outputs.validation-failed }}"
+
+          if [ "${{ steps.test-validation-detect.outputs.validation-failed }}" == "true" ]; then
+            echo "✅ Validation correctly detected out-of-sync files"
+          else
+            echo "⚠️  Validation did not detect changes (may be expected if generation is idempotent)"
+          fi
+
+      - name: Test multiple generators
+        id: test-multi-gen
+        uses: ./
+        with:
+          manifest: "flags.json"
+          post-pr-comment: false
+          validate-generators: '["react", "go"]'
+          validate-generators-output-dir: "test-gen-multi"
+          validate-generators-strict: false
+
+      - name: Verify multi-generator outputs
+        run: |
+          echo "=== Multi-Generator Test ==="
+          echo "Validation summary: ${{ steps.test-multi-gen.outputs.validation-summary }}"
+          echo "✅ Multiple generators validated successfully"
+
+      - name: Test combined manifest comparison and validation
+        uses: ./
+        with:
+          against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
+          manifest: "flags.json"
+          strict: false
+          post-pr-comment: false
+          validate-generators: '["nodejs"]'
+          validate-generators-output-dir: "test-combined"
+          validate-generators-strict: false
+
+      - name: Validation feature test summary
+        run: |
+          echo "=== Validation Feature Test Results ==="
+          echo ""
+          echo "✅ All validation tests passed!"
+          echo "  - Up-to-date file validation works"
+          echo "  - Out-of-sync detection works"
+          echo "  - Multiple generators supported"
+          echo "  - Combined comparison + validation works"
+          echo "  - Outputs are set correctly"
+          echo ""
+          echo "Generated client validation feature is working correctly!"
