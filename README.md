@@ -100,7 +100,8 @@ See the [Contributing](#contributing) section for development setup.
 
 - **Pull Request Validation**: Compare flag changes between feature branches and base branches automatically
 - **Branch Comparison**: Validate flag manifest changes during development workflow
-- **Remote Source Validation**: Check if local flag changes align with external flag management systems  
+- **Generated Client Validation**: Ensure developers regenerate type-safe clients after modifying flag manifests
+- **Remote Source Validation**: Check if local flag changes align with external flag management systems
 - **Remote-to-Remote Comparison**: Compare flag configurations between different remote providers or environments
 - **Drift Detection**: Identify when local configurations have diverged from remote configurations
 - **Environment Synchronization**: Ensure consistency across development, staging, and production environments
@@ -111,6 +112,7 @@ See the [Contributing](#contributing) section for development setup.
 
 - 🔍 **Manifest Comparison** - Compare local flag manifests against remote sources OR git branches
 - 🌿 **Git Branch Comparison** - Automatically compare against PR base branches with minimal configuration
+- ✅ **Generated Client Validation** - Verify that generated type-safe clients are up to date with flag manifests
 - 🔗 **Smart Mode Detection** - Automatically detects URL vs git mode based on input format
 - 🔐 **Authentication Support** - Secure access to protected flag sources using tokens
 - 📊 **Rich GitHub Integration** - Detailed summaries with change breakdowns in GitHub Action results
@@ -191,6 +193,9 @@ jobs:
 | `against-manifest-path` | Path where the fetched manifest from the against source will be saved locally | No | `against-flags.json` |
 | `strict` | Strict mode - fail the action if differences are found | No | `false` |
 | `post-pr-comment` | Post a comment on the PR when differences are detected | No | `true` |
+| `validate-generators` | Array of generator types to validate (e.g., `["react", "go"]`). Runs generation and checks for uncommitted changes | No | - |
+| `validate-generators-strict` | Fail the action if generated files are out of sync | No | `true` |
+| `validate-generators-output-dir` | Custom output directory for generated files (uses generator defaults if not specified) | No | - |
 
 ### Mode Detection
 
@@ -214,6 +219,9 @@ The action automatically detects the comparison mode based on the `against` inpu
 | `against-manifest-path` | File path where the against manifest was saved |
 | `local-manifest-path` | File path of the local manifest (original path or downloaded from URL) |
 | `summary` | Human-readable summary of the comparison result |
+| `validation-failed` | Boolean string indicating if generated client validation failed (`"true"`/`"false"`) |
+| `validation-changes` | Details of which files changed during generation validation |
+| `validation-summary` | Human-readable summary of validation results |
 
 ## Usage Examples
 
@@ -355,6 +363,120 @@ jobs:
           auth-token: ${{ secrets.PRODUCTION_API_TOKEN }}
           strict: true  # Fail if environments don't match
 ```
+
+### Generated Client Validation
+
+The action can validate that generated OpenFeature clients are up to date with the flag manifest. This ensures developers don't forget to regenerate type-safe client code after modifying flag manifests.
+
+When `validate-generators` is specified, the action will:
+1. Run `openfeature generate <type>` for each specified generator
+2. Check if any files were changed by the generation
+3. Report which files are out of sync
+4. Post PR comments with remediation steps (if enabled)
+5. Fail the workflow if strict mode is enabled (default: `true`)
+
+#### Basic Validation Example
+
+Validate a single generator type:
+
+```yaml
+name: Validate Generated Clients
+on: pull_request
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate React client is up to date
+        uses: open-feature/action@v1
+        with:
+          manifest: "flags.json"
+          validate-generators: '["react"]'
+```
+
+#### Multiple Generators
+
+Validate multiple generator types in one workflow:
+
+```yaml
+- name: Validate all generated clients
+  uses: open-feature/action@v1
+  with:
+    manifest: "flags.json"
+    validate-generators: '["react", "go", "python"]'
+```
+
+#### Non-Strict Validation (Warning Only)
+
+Detect out-of-sync files without failing the workflow:
+
+```yaml
+- name: Check generated clients (warn only)
+  uses: open-feature/action@v1
+  with:
+    manifest: "flags.json"
+    validate-generators: '["react", "nodejs"]'
+    validate-generators-strict: false
+```
+
+#### Custom Output Directory
+
+Specify a custom output directory for generated files:
+
+```yaml
+- name: Validate with custom output
+  uses: open-feature/action@v1
+  with:
+    manifest: "flags.json"
+    validate-generators: '["go"]'
+    validate-generators-output-dir: "pkg/featureflags"
+```
+
+#### Combined Validation
+
+Validate both manifest changes AND generated clients:
+
+```yaml
+name: Complete Flag Validation
+on: pull_request
+
+jobs:
+  validate-flags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Compare manifest changes against base branch
+      - name: Compare flag manifest
+        uses: open-feature/action@v1
+        with:
+          manifest: "flags.json"
+          # Auto-compares against PR base branch
+
+      # Validate generated clients are up to date
+      - name: Validate generated clients
+        uses: open-feature/action@v1
+        with:
+          manifest: "flags.json"
+          validate-generators: '["react", "go"]'
+```
+
+#### Available Generators
+
+The following generator types are supported:
+- `react` - React Hooks
+- `go` - Go client
+- `nodejs` - Node.js client
+- `python` - Python client
+- `java` - Java client
+- `csharp` - C# client
+- `nestjs` - NestJS decorators
+
+For more information on code generation, see the [OpenFeature CLI documentation](https://github.com/open-feature/cli).
 
 ## Manifest Format
 

@@ -1,0 +1,54 @@
+{
+  "flags": {
+    "enableNewUI": {
+      "state": "ENABLED",
+      "variants": {
+        "on": true,
+        "off": false
+      },
+      "defaultVariant": "off"
+    },
+    "featureToggleExample": {
+      "state": "ENABLED",
+      "variants": {
+        "control": "control-experience",
+        "treatment": "new-experience",
+        "premium": "premium-experience"
+      },
+      "defaultVariant": "treatment"
+    },
+    "maintenanceMode": {
+      "state": "DISABLED",
+      "variants": {
+        "on": true,
+        "off": false
+      },
+      "defaultVariant": "off"
+    },
+    "newFeatureFlag": {
+      "state": "ENABLED",
+      "variants": {
+        "on": true,
+        "off": false
+      },
+      "defaultVariant": "on"
+    },
+    "experimentalAPI": {
+      "state": "ENABLED",
+      "variants": {
+        "v1": "v1",
+        "v2": "v2",
+        "v3": "v3"
+      },
+      "defaultVariant": "v1"
+    },
+    "newlyAddedFlag": {
+      "state": "ENABLED",
+      "variants": {
+        "enabled": true,
+        "disabled": false
+      },
+      "defaultVariant": "disabled"
+    }
+  }
+}

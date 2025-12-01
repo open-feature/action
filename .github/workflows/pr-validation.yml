@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # Required for posting PR comments
+  pull-requests: write # Required for posting PR comments
 
 jobs:
   validate-flag-changes:
@@ -27,7 +27,7 @@ jobs:
         with:
           manifest: flags.json
           against: "https://raw.githubusercontent.com/open-feature/cli/refs/heads/main/sample/sample_manifest.json"
-          # PR comment will automatically detect this is a remote URL comparison
+          post-pr-comment: false
 
       - name: Git compare - Check local changes
         uses: ./
@@ -35,7 +35,7 @@ jobs:
         with:
           manifest: flags.json
           # No 'against' specified - automatically compares against PR base branch
-          # PR comment will automatically detect this is a git comparison
+          post-pr-comment: false
 
       - name: Display combined validation results
         run: |

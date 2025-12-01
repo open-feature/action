@@ -1,50 +1,33 @@
 {
+  "$schema": "../schema/v0/flag-manifest.json",
   "flags": {
-    "enableNewUI": {
-      "state": "ENABLED",
-      "variants": {
-        "on": true,
-        "off": false
-      },
-      "defaultVariant": "off",
-      "targeting": {}
+    "enableFeatureA": {
+      "flagType": "boolean",
+      "defaultValue": false,
+      "description": "Controls whether Feature A is enabled."
     },
-    "featureToggleExample": {
-      "state": "ENABLED", 
-      "variants": {
-        "control": "control-experience",
-        "treatment": "new-experience",
-        "premium": "premium-experience"
-      },
-      "defaultVariant": "treatment",
-      "targeting": {}
+    "usernameMaxLength": {
+      "flagType": "integer",
+      "defaultValue": 50,
+      "description": "Maximum allowed length for usernames."
     },
-    "maintenanceMode": {
-      "state": "DISABLED",
-      "variants": {
-        "enabled": true,
-        "disabled": false
-      },
-      "defaultVariant": "disabled",
-      "targeting": {}
+    "greetingMessage": {
+      "flagType": "string",
+      "defaultValue": "Hello there!",
+      "description": "The message to use for greeting users."
     },
-    "newFeatureFlag": {
-      "state": "ENABLED",
-      "variants": {
-        "enabled": true,
-        "disabled": false
-      },
-      "defaultVariant": "enabled",
-      "targeting": {}
+    "discountPercentage": {
+      "flagType": "float",
+      "defaultValue": 0.15,
+      "description": "Discount percentage applied to purchases."
     },
-    "experimentalAPI": {
-      "state": "DISABLED",
-      "variants": {
-        "v1": "legacy-api",
-        "v2": "new-api"
+    "themeCustomization": {
+      "flagType": "object",
+      "defaultValue": {
+        "primaryColor": "#007bff",
+        "secondaryColor": "#6c757d"
       },
-      "defaultVariant": "v1",
-      "targeting": {}
+      "description": "Allows customization of theme colors."
     }
   }
 }
